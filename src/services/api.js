@@ -132,7 +132,7 @@ export const checkFriendStatus = async (userID, friendID) => {
 // Lấy lịch sử kênh chat của người dùng
 export const getChatChannelHistory = async (userID) => {
   try {
-    const response = await API.get(`/chatHistory/user/${userID}`);
+    const response = await API.get(`/api/chatHistory/user/${userID}`);
     return response.data.channels; // Trả về danh sách kênh
   } catch (error) {
     console.error("Lỗi khi lấy lịch sử kênh chat:", error);
@@ -170,12 +170,12 @@ export const searchPrivateChannel = async (member1, member2) => {
 };
 
 // API lấy tin nhắn của kênh
-export const getMessages = async (channelId) => {
+export const getMessages = async (channelID, userID) => {
   try {
-    const response = await API.get(`/ws/messages/${channelId}`);
-    return response.data.messages;
+    const response = await API.get(`/api/chatHistory/${channelID}/${userID}`);
+    return response.data.message;
   } catch (error) {
-    console.error("Lỗi khi lấy tin nhắn:", error);
+    console.error("Lỗi khi lấy lịch sử tin nhắn:", error);
     throw error;
   }
 };

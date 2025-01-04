@@ -163,9 +163,17 @@ const Column2 = ({ mode, onSelectOption }) => {
               ) : (
                 <ul className="chat-history-list">
                   {chatHistory.map((channel) => (
-                    <li key={channel.id} className="chat-history-item">
-                      <span className="channel-name">{channel.name}</span>
-                      <span className="last-message-time">{new Date(channel.lastMessageTime).toLocaleString()}</span>
+                    <li key={channel.channelID} className="chat-history-item">
+                      <div className="channel-avatar">
+                        <img src={channel.channelAvatar || channel.userAvatar} alt="Avatar" width={40} />
+                        <span className="channel-name">{channel.channelName || channel.userName}</span>
+                      </div>
+                      <div className="channel-info">
+                        <span className="last-message">{channel.lastMessage || "Chưa có tin nhắn nào"}</span><br></br>
+                        <span className="last-message-time">
+                          {new Date(channel.lastActive).toLocaleString()}
+                        </span>
+                      </div>
                     </li>
                   ))}
                 </ul>
