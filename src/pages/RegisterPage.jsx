@@ -14,6 +14,20 @@ const RegisterPage = () => {
   const [resendCount, setResendCount] = useState(0);
   const [cooldown, setCooldown] = useState(0);
 
+  const startCooldown = (seconds = 30) => {
+    setCooldown(seconds);
+    const timer = setInterval(() => {
+      setCooldown((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }
+    , 1000);
+  }
+
   // Bước 1: gửi thông tin đăng ký + yêu cầu OTP
   const handleRegister = async (registerData) => {
     setLoading(true);
@@ -21,6 +35,8 @@ const RegisterPage = () => {
       await requestRegisterOtp(registerData);
       setRegisterPayload(registerData);
       setShowOtpModal(true); // Mở modal nhập OTP
+      setOtpError("");
+      startCooldown(30);
     } catch (error) {
       alert(error.message || "Gửi OTP thất bại");
     }
@@ -45,24 +61,15 @@ const RegisterPage = () => {
   };
 
   const handleResendOtp = async () => {
-    if (!registerPayload || cooldown > 0 ) return;
+    if (!registerPayload || cooldown > 0 || resendCount >= 3 ) return;
     setResending(true);
+    setOtpError("");
     try {
       await requestRegisterOtp(registerPayload);
       setOtpError("✅ Mã OTP mới đã được gửi, vui lòng kiểm tra email.");
       setResendCount((prev) => prev + 1);
-
       // Bắt đầu thời gian cooldown 30s
-      setCooldown(30);
-      const timer = setInterval(() => {
-        setCooldown((prev) => {
-          if (prev <= 1) { 
-            clearInterval(timer);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
+      startCooldown(30);
     } catch (error) {
       setOtpError(error.message || "Không thể gửi lại OTP.");
     }
@@ -94,17 +101,20 @@ const RegisterPage = () => {
             />
             <div className="flex flex-col gap-3">
               <button
-                className="text-sm text-fuchsia-400 hover:underline disabled:text-gray-500"
+                className={`text-sm ${
+                  resendCount >= 3 ? "text-gray-500" : "text-fuchsia-400 hover:underline"
+                }`}
                 onClick={handleResendOtp}
                 disabled={resending || cooldown > 0 || resendCount >= 3}
               >
                 {resending
                   ? "Đang gửi lại..."
-                  : cooldown > 0
-                    ? `Chờ ${cooldown}s`
-                    : resendCount >= 3
-                      ? "Đã gửi quá số lần cho phép"
-                      : "Gửi lại OTP"}
+                  : resendCount >= 3
+                    ? "Đã hết số lần gửi lại (3/3)"
+                    : cooldown > 0
+                      ? `Chờ ${cooldown}s để gửi lại`
+                      : `Gửi lại OTP (${3 - resendCount} lần còn lại)`
+                }
               </button>
               <div className="flex justify-between gap-2">
                 <button
