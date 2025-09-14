@@ -1,4 +1,5 @@
 import axios from "axios";
+import { jwtDecode } from "jwt-decode";
 
 // Khởi tạo Axios với cấu hình cơ bản
 const API = axios.create({
@@ -17,6 +18,85 @@ API.interceptors.request.use((config) => {
   return config;
 });
 
+// WebSocket instance
+let ws = null;
+
+export const connectWebSocket = (onMessageReceived) => {
+  const token = sessionStorage.getItem("token");
+  if (!token) {
+    console.error("[connectWebSocket]No token found in localStorage");
+    throw new Error("No token");
+  }
+  let userID;
+  try {
+    const decoded = jwtDecode(token);
+    userID = decoded.user_id || decoded.sub;
+    if (!userID) throw new Error("No userID in token");
+  } catch (error) {
+    console.error("[connectWebSocket]Invalid token:", error);
+    throw new Error("Invalid token");
+  }
+  console.log("[connectWebSocket]Connecting WebSocket with userID:", userID);
+
+  ws = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("http", "ws")}/ws/messages?token=${encodeURIComponent(token)}`);
+
+  ws.onopen = () => {
+    console.log("[connectWebSocket]Connected to /ws/messages");
+  };
+  ws.onmessage = (event) => {
+    console.log("[connectWebSocket]WebSocket message received:", event.data);
+    try {
+      const message = JSON.parse(event.data);
+      console.log("[WS][PARSED]", {
+      id: message.id,
+      channelId: message.channelId,
+      senderId: message.senderId,
+      senderName: message.senderName,
+      senderAvatar: message.senderAvatar,
+      messageType: message.messageType,
+      timestamp: message.timestamp,
+    });
+      onMessageReceived(message);
+    } catch (error) {
+      console.error("[WS] Error parsing message:", error);
+    }
+  };
+  ws.onerror = (error) => {
+    console.error("[connectWebSocket]WebSocket error:", error);
+  };
+  ws.onclose = () => {
+    console.log("[connectWebSocket]WebSocket connection closed");
+  };
+
+  return ws;
+};
+
+export const sendWebSocketMessage = (channelID, content, messageType = "Text") => {
+  const token = sessionStorage.getItem("token");
+  if (!token) throw new Error("No token");
+  let userID;
+  try {
+    const decoded = jwtDecode(token);
+    userID = decoded.user_id || decoded.sub;
+    if (!userID) throw new Error("No userID in token");
+  } catch (error) {
+    console.error("[sendWebSocketMessage]Invalid token:", error);
+    throw new Error("Invalid token");
+  }
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    console.error("[sendWebSocketMessage]WebSocket is not connected");
+    throw new Error("WebSocket is not connected");
+  }
+  const message = {
+    channelId: channelID,
+    senderId: userID,
+    content,
+    messageType,
+  };
+  console.log("[sendWebSocketMessage]Sending WebSocket message:", message);
+  ws.send(JSON.stringify(message));
+  return message;
+};
 
 // Hàm kiểm tra kết nối server
 const pingServer = async () => {
@@ -24,7 +104,7 @@ const pingServer = async () => {
     const response = await API.get('/ping');
     return response.data;
   } catch (error) {
-    console.error('Error pinging server:', error);
+    console.error('[pingServer]Error pinging server:', error);
     throw error;
   }
 };
@@ -33,10 +113,10 @@ const pingServer = async () => {
 const loginUser = async (loginData) => {
     try {
       const response = await API.post('/login', loginData);
-      console.log("Phản hồi từ API:", response.data); // Log phản hồi
+      console.log("[loginUser]Phản hồi từ API:", response.data); // Log phản hồi
       return response.data;
     } catch (error) {
-      console.error("Lỗi API đăng nhập:", error.response || error);
+      console.error("[loginUser]Lỗi API đăng nhập:", error.response || error);
       if (error.response?.data?.error) {
         throw new Error(error.response.data.error); // Trả lỗi cụ thể
       }
@@ -60,6 +140,16 @@ const loginUser = async (loginData) => {
 
 export { API, pingServer, registerUser, loginUser };
 
+export const requestRegisterOtp = async (userData) => {
+  const response = await API.post('/register/request-otp', userData);
+  return response.data;
+}
+
+export const verifyRegisterOtp = async (email, code) => {
+  const response = await API.post('/register/verify-otp', { email, code });
+  return response.data;
+}
+
 const searchChannels = async (keyword) => {
   try {
     const response = await API.get('/channels/search', {
@@ -67,7 +157,7 @@ const searchChannels = async (keyword) => {
     });
     return response.data.channels; // Trả về danh sách kênh
   } catch (error) {
-    console.error('Lỗi khi tìm kiếm kênh:', error.response || error);
+    console.error("[searchChannels]Lỗi khi tìm kiếm kênh:", error.response || error);
     throw error;
   }
 };
@@ -77,10 +167,10 @@ export { searchChannels };
 // Lấy danh sách bạn bè
 export const getFriends = async (userID) => {
   try {
-    const response = await API.get(`/friends/${userID}`);
+    const response = await API.get(`/api/friends/${userID}/list`);
     return response.data.friends;
   } catch (error) {
-    console.error("Lỗi khi lấy danh sách bạn bè:", error);
+    console.error("[getFriends]Lỗi khi lấy danh sách bạn bè:", error);
     throw error;
   }
 };
@@ -88,10 +178,10 @@ export const getFriends = async (userID) => {
 // Lấy danh sách lời mời kết bạn
 export const getFriendRequests = async (userID) => {
   try {
-    const response = await API.get(`/friend-requests/${userID}`);
+    const response = await API.get(`/api/friends/${userID}/requests`);
     return response.data.requests;
   } catch (error) {
-    console.error("Lỗi khi lấy lời mời kết bạn:", error);
+    console.error("[getFriendRequests]Lỗi khi lấy lời mời kết bạn:", error);
     throw error;
   }
 };
@@ -100,9 +190,10 @@ export const getFriendRequests = async (userID) => {
 export const searchUserByPhone = async (phone) => {
   try {
     const response = await API.get('/users/search', { params: { phone } });
+    console.log("[searchUserByPhone]Kết quả tìm thành viên:", response.data.users);
     return response.data.users;
   } catch (error) {
-    console.error("Lỗi khi tìm kiếm người dùng:", error.response || error);
+    console.error("[searchUserByPhone]Lỗi khi tìm kiếm người dùng:", error.response || error);
     throw error.response?.data?.error || "Không thể tìm thấy người dùng";
   }
 };
@@ -113,16 +204,30 @@ export const sendFriendRequest = async (userID, friendID) => {
     throw new Error("Thiếu thông tin userID hoặc friendID.");
   }
   try {
-    await API.post(`/friends/${userID}/send/${friendID}`);
+    await API.post(`/api/friends/${userID}/send/${friendID}`);
   } catch (error) {
     throw new Error(error.response?.data?.error || "Lỗi gửi yêu cầu kết bạn");
   }
 };
 
+// Chấp nhận lời mời kết bạn
+export const acceptFriendRequest = async (userID, friendID) => {
+  if (!userID || !friendID) {
+    throw new Error("Thiếu thông tin userID hoặc friendID.");
+  }
+  try {
+    await API.put(`/api/friends/${userID}/accept/${friendID}`);
+  } catch (error) {
+    throw new Error(error.response?.data?.error || "Lỗi chấp nhận yêu cầu kết bạn");
+  }
+};
+
+// Hủy yêu cầu kết bạn
+
 // Kiểm tra trạng thái bạn bè
 export const checkFriendStatus = async (userID, friendID) => {
   try {
-    const { data } = await API.get(`/friends/${userID}/status/${friendID}`);
+    const { data } = await API.get(`/api/friends/${userID}/status/${friendID}`);
     return data.status;
   } catch (error) {
     throw new Error(error.response?.data?.error || "Không thể kiểm tra trạng thái bạn bè");
@@ -135,7 +240,7 @@ export const getChatChannelHistory = async (userID) => {
     const response = await API.get(`/api/chatHistory/user/${userID}`);
     return response.data.channels; // Trả về danh sách kênh
   } catch (error) {
-    console.error("Lỗi khi lấy lịch sử kênh chat:", error);
+    console.error("[getChatChannelHistory]Lỗi khi lấy lịch sử kênh chat:", error);
     throw error;
   }
 };
@@ -151,8 +256,29 @@ export const createPrivateChannel = async (currentUserID, targetUserID) => {
     });
     return response.data;
   } catch (error) {
-    console.error("Lỗi khi tạo kênh riêng tư:", error.response || error);
+    console.error("[createPrivateChannel]Lỗi khi tạo kênh riêng tư:", error.response || error);
     throw error.response?.data?.error || "Không thể tạo kênh.";
+  }
+};
+
+// Tạo kênh nhóm
+export const createGroupChannel = async (groupChannelName, currentUserID, ...memberIDs) => {
+  try {
+    const allMembers = [currentUserID, ...memberIDs];
+    if (allMembers.length < 3) { 
+      throw new Error("Cần ít nhất 3 thành viên để tạo kênh nhóm.");
+    }
+    const response = await API.post('/api/channels', {
+      userID: currentUserID,
+      name: groupChannelName,
+      type: "Group",
+      members: [...memberIDs],
+      approvalRequired: false, // Không cần phê duyệt
+    });
+    return response.data;
+  } catch (error) {
+    console.error("[createGroupChannel]Lôi lỗi khi tạo kênh nhóm:", error.response || error);
+    throw error.response?.data?.error || "Không thể tạo kênh nhóm."; 
   }
 };
 
@@ -164,7 +290,7 @@ export const searchPrivateChannel = async (member1, member2) => {
     });
     return response.data; // Trả về kênh tìm thấy
   } catch (error) {
-    console.error("Lỗi khi tìm kênh riêng tư:", error.response || error);
+    console.error("[searchPrivateChannel]Lỗi khi tìm kênh riêng tư:", error.response || error);
     throw error;
   }
 };
@@ -175,18 +301,27 @@ export const getMessages = async (channelID, userID) => {
     const response = await API.get(`/api/chatHistory/${channelID}/${userID}`);
     return response.data.message;
   } catch (error) {
-    console.error("Lỗi khi lấy lịch sử tin nhắn:", error);
+    console.error("[getMessages]Lỗi khi lấy lịch sử tin nhắn:", error);
     throw error;
   }
 };
-
-// API gửi tin nhắn
-export const sendMessage = async (messageData) => {
+        
+export const getUserByID = async (userID) => {
   try {
-    const response = await API.post('/api/messages/send', messageData);
-    return response.data;
+    const response = await API.get(`/users/${userID}`);
+    return response.data.user;
   } catch (error) {
-    console.error("Lỗi khi gửi tin nhắn:", error);
+    console.error("[getUserByID]Lỗi khi lấy thông tin người dùng:", error);
+    throw error;
+  }
+}
+
+export const getUserChannels = async (userID) => {
+  try {
+    const response = await API.get(`/api/channels/user/${userID}/channels`);
+    return response.data.channels; // Trả về danh sách kênh
+  } catch (error) {
+    console.error("[getUserChannels]Lỗi khi lấy danh sách kênh của người dùng:", error);
     throw error;
   }
 };

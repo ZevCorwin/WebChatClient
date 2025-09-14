@@ -5,17 +5,17 @@ export const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     return token ? jwtDecode(token) : null;
   });
 
   const login = (token) => {
-    localStorage.setItem('token', token);
+    sessionStorage.setItem('token', token);
     setUser(jwtDecode(token));
   };
 
   const logout = () => {
-    localStorage.removeItem('token');
+    sessionStorage.removeItem('token');
     setUser(null);
   };
 

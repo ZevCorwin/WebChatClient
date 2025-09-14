@@ -4,10 +4,16 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import HomePage from "./pages/HomePage";
 import PrivateRoute from "./components/PrivateRoute";
+import NeonCursor from "./components/NeonCursor";
 
 function App() {
   return (
+    
     <Router>
+      <div className="relative">
+      <NeonCursor />
+      {/* Các component khác */}
+    </div>
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} /> {/* Chuyển hướng */}
         <Route path="/login" element={<LoginPage />} />
