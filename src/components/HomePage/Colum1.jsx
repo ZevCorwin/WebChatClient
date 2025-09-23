@@ -1,10 +1,34 @@
-import React, { useState } from "react";
+import React, { useEffect ,useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { getUserByID } from "../../services/api";
 import { AiOutlineMessage, AiOutlineTeam, AiOutlineBell, AiOutlineLogout } from "react-icons/ai";
 
 const Column1 = ({ setMode, resetToDefault }) => {
   const navigate = useNavigate();
   const [isCollapsed, setIsCollapsed] = useState(true);
+  const [avatarUrl, setAvatarUrl] = useState("/uploads/deadlineDi.jpg");
+
+  useEffect(() => {
+    const loadAvatar = async () => {
+      const userID = sessionStorage.getItem("userID");
+      if (!userID) return;
+      try {
+        const data = await getUserByID(userID);
+        const userData = data?.user || data || {};
+        let url = userData.avatar || "";
+        // BE trả kiểu "/uploads/xxx.jpg" → prefix base URL
+        if (url && !/^https?:\/\//i.test(url)) {
+          const API_BASE = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
+          url = API_BASE + url;
+        }
+        setAvatarUrl(url || "/uploads/deadlineDi.jpg");
+      } catch (error) {
+        setAvatarUrl("/uploads/deadlineDi.jpg");
+        console.error("Failed to load avatar:", error);
+      }
+    };
+    loadAvatar();
+  }, []);
 
   const handleLogout = () => {
     sessionStorage.removeItem("token");
@@ -27,10 +51,10 @@ const Column1 = ({ setMode, resetToDefault }) => {
       onMouseLeave={() => setIsCollapsed(true)}
     >
       {/* Avatar */}
-      <div className="mt-4 mb-8 w-full flex justify-center cursor-pointer">
+      <div className="mt-4 mb-8 w-full flex justify-center cursor-pointer" onClick={() => navigate("/profile")}>
         <div className="w-16 h-16 rounded-full border-4 border-purple-500/60 shadow-lg transition-all duration-500">
           <img
-            src="/path/to/avatar.jpg"
+            src={avatarUrl}
             alt="Avatar"
             className="w-full h-full rounded-full object-cover"
           />

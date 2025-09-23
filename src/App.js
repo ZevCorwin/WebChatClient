@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Route, Routes, Navigate } from "react-router-d
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import HomePage from "./pages/HomePage";
+import ProfilePage from "./pages/ProfilePage";
 import PrivateRoute from "./components/PrivateRoute";
 import NeonCursor from "./components/NeonCursor";
 
@@ -26,6 +27,7 @@ function App() {
             </PrivateRoute>
           }
         />
+        <Route path="/profile" element={<ProfilePage />} />
       </Routes>
     </Router>
   );
