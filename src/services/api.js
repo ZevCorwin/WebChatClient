@@ -325,3 +325,46 @@ export const getUserChannels = async (userID) => {
     throw error;
   }
 };
+
+// B1: Gửi OTP đến email cũ (cần nhập mật khẩu)
+export const requestOldEmailOTP = async (userID, password) => {
+  try {
+    const { data } = await API.post(`/users/${userID}/change-email/request-old-otp`, { password });
+    return data;
+  } catch (error) {
+    throw new Error(error.response?.data?.error || "Không thể gửi OTP email cũ");
+  }
+};
+
+// B2: Xác thực OTP từ email cũ
+export const verifyOldEmailOTP = async (userID, otp) => {
+  try {
+    const { data } = await API.post(`/users/${userID}/change-email/verify-old-otp`, { otp });
+    return data;
+  } catch (error) {
+    throw new Error(error.response?.data?.error || "OTP email cũ không hợp lệ");
+  }
+};
+
+// B3: Gửi OTP đến email mới
+export const requestNewEmailOTP = async (userID, newEmail) => {
+  try {
+    const { data } = await API.post(`/users/${userID}/change-email/request-new-otp`, { newEmail });
+    return data;
+  } catch (error) {
+    throw new Error(error.response?.data?.error || "Không thể gửi OTP email mới");
+  }
+};
+
+// B4: Xác thực OTP email mới và cập nhật email
+export const verifyNewEmailAndChange = async (userID, newEmail, otp) => {
+  try {
+    const { data } = await API.post(`/users/${userID}/change-email/verify-new-email`, {
+      newEmail,
+      otp,
+    });
+    return data;
+  } catch (error) {
+    throw new Error(error.response?.data?.error || "Không thể đổi email");
+  }
+};

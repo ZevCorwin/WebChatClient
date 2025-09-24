@@ -4,6 +4,7 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import HomePage from "./pages/HomePage";
 import ProfilePage from "./pages/ProfilePage";
+import SettingsPage from "./pages/SettingsPage";
 import PrivateRoute from "./components/PrivateRoute";
 import NeonCursor from "./components/NeonCursor";
 
@@ -28,6 +29,7 @@ function App() {
           }
         />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/settings" element={<SettingsPage />} />
       </Routes>
     </Router>
   );

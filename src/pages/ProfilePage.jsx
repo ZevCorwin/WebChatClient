@@ -63,10 +63,10 @@ const ProfilePage = () => {
         alert("Cập nhật Tên, Giới tính, Ngày sinh, Địa chỉ, Hôn nhân"),
     },
     {
-      name: "Email & Mật khẩu",
+      name: "Cài Đặt",
       icon: <AiOutlineLock />,
       color: "bg-blue-600/80",
-      action: () => alert("Đổi Email hoặc Mật khẩu"),
+      action: () => navigate("/settings"),
     },
     {
       name: "Đăng xuất",
