@@ -10,9 +10,10 @@ import UpdateProfileModal from "../components/Settings/UpdateProfileModal";
 
 const SettingsPage = () => {
   const navigate = useNavigate();
-
-  // Quản lý modal
   const [openModal, setOpenModal] = useState(null);
+
+  // Lấy userID từ sessionStorage
+  const userID = sessionStorage.getItem("userID");
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-black via-purple-900 to-black text-white">
@@ -68,10 +69,23 @@ const SettingsPage = () => {
       </div>
 
       {/* Các modal */}
-      <ChangeEmailModal isOpen={openModal === "email"} onClose={() => setOpenModal(null)} />
-      <ChangePasswordModal isOpen={openModal === "password"} onClose={() => setOpenModal(null)} />
-      <ChangePhoneModal isOpen={openModal === "phone"} onClose={() => setOpenModal(null)} />
-      <UpdateProfileModal isOpen={openModal === "profile"} onClose={() => setOpenModal(null)} />
+      <ChangeEmailModal
+        isOpen={openModal === "email"}
+        onClose={() => setOpenModal(null)}
+      />
+      <ChangePasswordModal
+        isOpen={openModal === "password"}
+        onClose={() => setOpenModal(null)}
+      />
+      <ChangePhoneModal
+        isOpen={openModal === "phone"}
+        onClose={() => setOpenModal(null)}
+      />
+      <UpdateProfileModal
+        isOpen={openModal === "profile"}
+        onClose={() => setOpenModal(null)}
+        userID={userID}  // ✅ truyền userID vào modal
+      />
     </div>
   );
 };

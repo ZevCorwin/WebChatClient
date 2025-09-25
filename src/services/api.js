@@ -1,6 +1,8 @@
 import axios from "axios";
 import { jwtDecode } from "jwt-decode";
 
+const API_BASE = process.env.REACT_APP_BACKEND_URL || "http://localhost:8080";
+
 // Khởi tạo Axios với cấu hình cơ bản
 const API = axios.create({
   baseURL: process.env.REACT_APP_BACKEND_URL, // URL cơ sở từ file .env
@@ -367,4 +369,68 @@ export const verifyNewEmailAndChange = async (userID, newEmail, otp) => {
   } catch (error) {
     throw new Error(error.response?.data?.error || "Không thể đổi email");
   }
+};
+
+export const changePhone = async (userID, password, newPhone) => {
+  try {
+    const response = await API.post(`/users/${userID}/change-phone`, {
+      password,
+      newPhone,
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.error || "Không thể đổi số điện thoại");
+  }
+};
+
+// Đổi mật khẩu
+export const changePassword = async (userID, oldPassword, newPassword) => {
+  try {
+    const response = await API.post(`/users/${userID}/change-password`, {
+      oldPassword,
+      newPassword,
+    });
+    return response.data;
+  } catch (error) {
+    console.error("[changePassword] Lỗi:", error.response || error);
+    throw new Error(error.response?.data?.error || "Không thể đổi mật khẩu");
+  }
+};
+
+export const updateUserProfile = async (userID, profileData) => {
+  try {
+    const response = await API.put(`/users/${userID}`, profileData);
+    return response.data;
+  } catch (error) {
+    console.error("[updateUserProfile] Lỗi khi cập nhật:", error.response || error);
+    throw error.response?.data?.error || "Không thể cập nhật thông tin.";
+  }
+};
+
+// Upload avatar
+export const updateAvatar = async (userID, file, defaultUrl = null) => {
+  const formData = new FormData();
+  formData.append("avatar", file);
+  const res = await axios.post(`${API_BASE}/users/${userID}/avatar`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return res.data;
+};
+
+export const setDefaultAvatar = async (userID) => {
+  const res = await axios.post(
+    `${API_BASE}/users/${userID}/avatar?default=true`
+  );
+  return res.data;
+};
+
+// Upload cover photo
+export const updateCoverPhoto = async (userID, file) => {
+  const formData = new FormData();
+  formData.append("cover", file);
+
+  const res = await axios.post(`${API_BASE}/users/${userID}/cover`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return res.data;
 };
