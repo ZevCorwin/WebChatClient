@@ -166,6 +166,18 @@ const searchChannels = async (keyword) => {
 
 export { searchChannels };
 
+// Tìm kiếm người dùng bằng số điện thoại
+export const searchUserByPhone = async (phone) => {
+  try {
+    const response = await API.get('/users/search', { params: { phone } });
+    console.log("[searchUserByPhone]Kết quả tìm thành viên:", response.data.users);
+    return response.data.users;
+  } catch (error) {
+    console.error("[searchUserByPhone]Lỗi khi tìm kiếm người dùng:", error.response || error);
+    throw error.response?.data?.error || "Không thể tìm thấy người dùng";
+  }
+};
+
 // Lấy danh sách bạn bè
 export const getFriends = async (userID) => {
   try {
@@ -188,17 +200,33 @@ export const getFriendRequests = async (userID) => {
   }
 };
 
-// Tìm kiếm người dùng bằng số điện thoại
-export const searchUserByPhone = async (phone) => {
+// Hủy yêu cầu kết bạn
+export const cancelFriendRequest = async (userID, friendID) => {
   try {
-    const response = await API.get('/users/search', { params: { phone } });
-    console.log("[searchUserByPhone]Kết quả tìm thành viên:", response.data.users);
-    return response.data.users;
+    await API.delete(`/api/friends/${userID}/cancel/${friendID}`);
   } catch (error) {
-    console.error("[searchUserByPhone]Lỗi khi tìm kiếm người dùng:", error.response || error);
-    throw error.response?.data?.error || "Không thể tìm thấy người dùng";
+    throw new Error(error.response?.data?.error || "Không thể hủy yêu cầu kết bạn");
   }
 };
+
+// Từ chối lời mời kết bạn
+export const declineFriendRequest = async (userID, friendID) => {
+  try {
+    await API.put(`/api/friends/${userID}/decline/${friendID}`);
+  } catch (error) {
+    throw new Error(error.response?.data?.error || "Không thể từ chối lời mời kết bạn");
+  }
+};
+
+// Xóa bạn
+export const removeFriend = async (userID, friendID) => {
+  try {
+    await API.delete(`/api/friends/${userID}/remove/${friendID}`);
+  } catch (error) {
+    throw new Error(error.response?.data?.error || "Không thể xóa bạn");
+  }
+};
+
 
 // Gửi yêu cầu kết bạn
 export const sendFriendRequest = async (userID, friendID) => {
@@ -223,8 +251,6 @@ export const acceptFriendRequest = async (userID, friendID) => {
     throw new Error(error.response?.data?.error || "Lỗi chấp nhận yêu cầu kết bạn");
   }
 };
-
-// Hủy yêu cầu kết bạn
 
 // Kiểm tra trạng thái bạn bè
 export const checkFriendStatus = async (userID, friendID) => {

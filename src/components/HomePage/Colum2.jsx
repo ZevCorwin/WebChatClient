@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { 
   searchUserByPhone, checkFriendStatus, getChatChannelHistory, 
   createPrivateChannel, createGroupChannel, searchPrivateChannel, 
-  sendFriendRequest, getFriends, getUserByID 
+  sendFriendRequest, cancelFriendRequest,getFriends, getUserByID 
 } from "../../services/api";
 
 // ----- Component con cho Item Chat -----
@@ -20,7 +20,7 @@ const ChatItem = ({ channel, onSelect }) => (
 );
 
 // ----- Friend Modal -----
-const FriendModal = ({ searchText, setSearchText, searchResult, searchError, clearSearchText, onSearch, onClose, onSendRequest, onStartChat, friendStatus, currentUserId }) => (
+const FriendModal = ({ searchText, setSearchText, searchResult, searchError, clearSearchText, onSearch, onClose, onSendRequest, onCancelRequest, onStartChat, friendStatus, currentUserId }) => (
   <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-70 z-50">
     <div className="bg-gray-900 text-purple-200 p-4 rounded w-96 space-y-3">
       <div className="flex gap-2">
@@ -40,10 +40,22 @@ const FriendModal = ({ searchText, setSearchText, searchResult, searchError, cle
                   <button onClick={() => onSendRequest(searchResult.id)} className="px-2 py-1 bg-purple-700 rounded hover:bg-purple-600">Kết bạn</button>
                   <button onClick={() => onStartChat(searchResult.id)} className="px-2 py-1 bg-purple-700 rounded hover:bg-purple-600">Nhắn tin</button>
                 </div>}
-                {friendStatus === "Pending" && <div className="flex gap-2 mt-2">
-                  <button className="px-2 py-1 bg-red-600 rounded">Hủy yêu cầu</button>
-                  <button onClick={() => onStartChat(searchResult.id)} className="px-2 py-1 bg-purple-700 rounded hover:bg-purple-600">Nhắn tin</button>
-                </div>}
+                {friendStatus === "Pending" && (
+                  <div className="flex gap-2 mt-2">
+                    <button
+                      onClick={() => onCancelRequest(searchResult.id)}
+                      className="px-2 py-1 bg-red-600 rounded hover:bg-red-500"
+                    >
+                      Hủy yêu cầu
+                    </button>
+                    <button
+                      onClick={() => onStartChat(searchResult.id)}
+                      className="px-2 py-1 bg-purple-700 rounded hover:bg-purple-600"
+                    >
+                      Nhắn tin
+                    </button>
+                  </div>
+                )}
                 {friendStatus === "Friend" && <button onClick={() => onStartChat(searchResult.id)} className="px-2 py-1 bg-purple-700 rounded hover:bg-purple-600 mt-2">Nhắn tin</button>}
               </>
             }
@@ -189,6 +201,16 @@ const Column2 = ({ mode, onSelectOption, setCurrentChannel }) => {
     catch { alert("Không thể gửi yêu cầu kết bạn."); }
   };
 
+  const handleCancelRequest = async (friendID) => {
+    try {
+      await cancelFriendRequest(currentUserId, friendID);
+      alert("Đã hủy yêu cầu kết bạn.");
+      setFriendStatus("none"); // cập nhật lại trạng thái
+    } catch {
+      alert("Không thể hủy yêu cầu kết bạn.");
+    }
+  };
+
   const handleStartPrivateChat = async (targetUserID) => {
     try {
       const existingChannel = await searchPrivateChannel(currentUserId, targetUserID);
@@ -270,8 +292,10 @@ const Column2 = ({ mode, onSelectOption, setCurrentChannel }) => {
         searchText={searchText} setSearchText={setSearchText}
         searchResult={searchResult} searchError={searchError}
         clearSearchText={clearSearchText} onSearch={handleSearchFriend} onClose={closeFriendModal}
-        onSendRequest={handleSendFriendRequest} onStartChat={handleStartPrivateChat}
-        friendStatus={friendStatus} currentUserId={currentUserId}
+        onSendRequest={handleSendFriendRequest} onCancelRequest={handleCancelRequest}
+        onStartChat={handleStartPrivateChat}
+        friendStatus={friendStatus} 
+        currentUserId={currentUserId}
       />}
 
       {groupModalVisible && <GroupModal
@@ -291,7 +315,6 @@ const Column2 = ({ mode, onSelectOption, setCurrentChannel }) => {
         {searchMode ? <button className="px-3 bg-red-600 rounded hover:bg-red-500" onClick={disableSearchMode}>Đóng</button> :
           <>
             <button className="px-3 bg-purple-700 rounded hover:bg-purple-600" onClick={openFriendModal}>Kết bạn</button>
-            <button className="px-3 bg-purple-700 rounded hover:bg-purple-600" onClick={handleOpenGroupModal}>Tạo nhóm</button>
           </>
         }
       </div>
@@ -308,7 +331,8 @@ const Column2 = ({ mode, onSelectOption, setCurrentChannel }) => {
         searchText={searchText} setSearchText={setSearchText}
         searchResult={searchResult} searchError={searchError}
         clearSearchText={clearSearchText} onSearch={handleSearchFriend} onClose={closeFriendModal}
-        onSendRequest={handleSendFriendRequest} onStartChat={handleStartPrivateChat}
+        onSendRequest={handleSendFriendRequest} onCancelRequest={handleCancelRequest}
+        onStartChat={handleStartPrivateChat}
         friendStatus={friendStatus} currentUserId={currentUserId}
       />}
 

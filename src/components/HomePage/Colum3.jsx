@@ -4,6 +4,8 @@ import {
   getFriends, 
   getFriendRequests, 
   acceptFriendRequest,
+  declineFriendRequest,
+  removeFriend,
   connectWebSocket,
   sendWebSocketMessage,
 } from "../../services/api";
@@ -153,6 +155,26 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     }
   };
 
+  const handleDeclineFriendRequest = async (friendID) => {
+    const userID = sessionStorage.getItem("userID");
+    try {
+      await declineFriendRequest(userID, friendID);
+      setFriendRequests((prev) => prev.filter((r) => r.friendID !== friendID));
+    } catch (error) {
+      alert("Không thể từ chối lời mời kết bạn.");
+    }
+  };
+
+  const handleRemoveFriend = async (friendID) => {
+    const userID = sessionStorage.getItem("userID");
+    try {
+      await removeFriend(userID, friendID);
+      setFriends((prev) => prev.filter((f) => f.friendID !== friendID));
+    } catch (error) {
+      alert("Không thể xóa bạn.");
+    }
+  };
+
   // ---------------- UI RENDER ----------------
 
   const renderChatWindow = () => (
@@ -272,7 +294,10 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                 <button className="px-3 py-1 rounded-lg bg-purple-700 text-white hover:bg-purple-600">
                   Nhắn tin
                 </button>
-                <button className="px-3 py-1 rounded-lg bg-red-700 text-white hover:bg-red-600">
+                <button 
+                  className="px-3 py-1 rounded-lg bg-red-700 text-white hover:bg-red-600"
+                  onClick={() => handleRemoveFriend(friend.friendID)}
+                >
                   Xóa
                 </button>
               </div>
@@ -312,7 +337,10 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                 >
                   Chấp nhận
                 </button>
-                <button className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white">
+                <button
+                  className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white"
+                  onClick={() => handleDeclineFriendRequest(request.friendID)}  
+                >
                   Từ chối
                 </button>
               </div>
