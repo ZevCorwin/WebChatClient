@@ -1,14 +1,18 @@
 import React, { useEffect, useRef, useState } from "react";
-import { 
-  getMessages, 
-  getFriends, 
-  getFriendRequests, 
+import {
+  getMessages,
+  getFriends,
+  getFriendRequests,
   acceptFriendRequest,
   declineFriendRequest,
   removeFriend,
   connectWebSocket,
   sendWebSocketMessage,
+  getChannelMembers,
 } from "../../services/api";
+import { BsThreeDotsVertical } from "react-icons/bs";
+import ChannelMenu from "../Channel/ChannelMenu";
+import ChannelModal from "../Channel/ChannelModal";
 
 const Column3 = ({ mode, selectedOption, currentChannel }) => {
   const [friends, setFriends] = useState([]);
@@ -20,6 +24,9 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
   const [messagesError, setMessagesError] = useState("");
   const [newMessage, setNewMessage] = useState("");
   const [newMessageError, setNewMessageError] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [myRole, setMyRole] = useState("Member");
+  const [modal, setModal] = useState({ type: null, data: null });
 
   const me = sessionStorage.getItem("userID");
   const scrollBottomRef = useRef(null);
@@ -83,7 +90,6 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     try {
       const userID = sessionStorage.getItem("userID");
       const response = await getMessages(channelID, userID);
-      // Đỡ mọi kiểu payload: {messages:[]}, {message:[]}, []:
       const list = Array.isArray(response?.messages)
         ? response.messages
         : Array.isArray(response?.message)
@@ -109,7 +115,6 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
       await sendWebSocketMessage(currentChannel.id || currentChannel.channelID, newMessage, "Text");
       setNewMessage("");
       setNewMessageError("");
-      // Không append thủ công — để WS callback đẩy vào
     } catch (err) {
       setNewMessageError("Không thể gửi tin nhắn.");
     }
@@ -150,9 +155,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     try {
       await acceptFriendRequest(userID, friendID);
       setFriendRequests((prev) => prev.filter((r) => r.friendID !== friendID));
-    } catch (error) {
-      // có thể hiển thị toast ở đây
-    }
+    } catch (error) {}
   };
 
   const handleDeclineFriendRequest = async (friendID) => {
@@ -175,8 +178,46 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     }
   };
 
-  // ---------------- UI RENDER ----------------
+  const handleOpenMenu = async () => {
+    if (!currentChannel?.channelID) return;
 
+    try {
+      const members = await getChannelMembers(currentChannel.channelID);
+      const me = sessionStorage.getItem("userID");
+      const myMember = members.find((m) => m.MemberID === me);
+      console.log("[handleOpenMenu]Channel members:", members);
+      setMyRole(myMember?.Role || "Member");
+      setMenuOpen(true);
+    } catch (err) {
+      console.error("Không thể lấy danh sách thành viên:", err);
+      setMenuOpen(true);
+    }
+  };
+
+  // --- Xử lý khi chọn action từ menu ---
+  const handleChannelAction = (action) => {
+    switch (action) {
+      case "addMember":
+        setModal({ type: "addMember" });
+        break;
+      case "listMembers":
+        setModal({ type: "listMembers" });
+        break;
+      case "blockedList":
+        setModal({ type: "blockedList" });
+        break;
+      case "leaveChannel":
+        setModal({ type: "confirmLeave" });
+        break;
+      case "dissolveChannel":
+        setModal({ type: "confirmDissolve" });
+        break;
+      default:
+        alert("Chức năng chưa được hỗ trợ");
+    }
+  };
+
+  // ---------------- UI RENDER ----------------
   const renderChatWindow = () => (
     <div className="flex h-full flex-col rounded-xl p-4 bg-gradient-to-br from-black via-purple-900 to-black shadow-[0_0_20px_#a855f7]">
       {/* Header */}
@@ -190,26 +231,32 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
           <h3 className="text-lg font-bold text-purple-300">
             {currentChannel?.channelName || currentChannel?.userName || "Không tên"}
           </h3>
-          <p className="text-xs text-gray-400">
-            {currentChannel?.channelType || ""}
-          </p>
+          <p className="text-xs text-gray-400">{currentChannel?.channelType || ""}</p>
         </div>
+        <button
+          onClick={handleOpenMenu}
+          className="ml-auto p-2 rounded-full hover:bg-purple-700/30 transition"
+        >
+          <BsThreeDotsVertical className="w-6 h-6 text-gray-400 hover:text-white" />
+        </button>
+        <ChannelMenu
+          visible={menuOpen}
+          onClose={() => setMenuOpen(false)}
+          currentChannel={currentChannel}
+          role={myRole}
+          onAction={handleChannelAction}
+        />
       </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto space-y-2 p-2 rounded-lg bg-black/30 backdrop-blur-sm">
-        {messagesError && (
-          <p className="text-red-400 text-sm">{messagesError}</p>
-        )}
+        {messagesError && <p className="text-red-400 text-sm">{messagesError}</p>}
         {messages.length > 0 ? (
           messages.map((msg) => {
             const mine = msg.senderId?.toString() === me?.toString();
             return (
-              <div
-                key={msg.id || msg.timestamp}
-                className={`flex ${mine ? "justify-end" : "justify-start"}`}
-              >
-                <div className={`max-w-[70%] flex items-start gap-2`}>
+              <div key={msg.id || msg.timestamp} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+                <div className="max-w-[70%] flex items-start gap-2">
                   {!mine && (
                     <img
                       src={msg.senderAvatar || "/default-avatar.png"}
@@ -219,10 +266,11 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                   )}
                   <div
                     className={`px-3 py-2 rounded-2xl text-sm text-white shadow transition
-                    ${mine
-                      ? "bg-gradient-to-r from-fuchsia-600 via-purple-600 to-blue-600 shadow-[0_0_12px_#a855f7]"
-                      : "bg-purple-700/30 border border-purple-500/40"}`
-                    }
+                      ${
+                        mine
+                          ? "bg-gradient-to-r from-fuchsia-600 via-purple-600 to-blue-600 shadow-[0_0_12px_#a855f7]"
+                          : "bg-purple-700/30 border border-purple-500/40"
+                      }`}
                   >
                     {!mine && (
                       <div className="text-xs text-purple-300 font-semibold mb-0.5">
@@ -246,9 +294,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
 
       {/* Input */}
       <div className="mt-3 flex items-center gap-2">
-        {newMessageError && (
-          <p className="text-red-400 text-sm">{newMessageError}</p>
-        )}
+        {newMessageError && <p className="text-red-400 text-sm">{newMessageError}</p>}
         <input
           type="text"
           placeholder="Nhập tin nhắn..."
@@ -294,7 +340,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                 <button className="px-3 py-1 rounded-lg bg-purple-700 text-white hover:bg-purple-600">
                   Nhắn tin
                 </button>
-                <button 
+                <button
                   className="px-3 py-1 rounded-lg bg-red-700 text-white hover:bg-red-600"
                   onClick={() => handleRemoveFriend(friend.friendID)}
                 >
@@ -339,7 +385,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                 </button>
                 <button
                   className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white"
-                  onClick={() => handleDeclineFriendRequest(request.friendID)}  
+                  onClick={() => handleDeclineFriendRequest(request.friendID)}
                 >
                   Từ chối
                 </button>
@@ -370,6 +416,13 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
           <p className="text-gray-400">Chọn một tùy chọn để xem nội dung.</p>
         )
       ) : null}
+
+      {/* Modal quản lý kênh */}
+      <ChannelModal
+        modal={modal}
+        currentChannel={currentChannel}
+        onClose={() => setModal({ type: null, data: null })}
+      />
     </div>
   );
 };

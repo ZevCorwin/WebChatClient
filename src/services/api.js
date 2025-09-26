@@ -310,6 +310,82 @@ export const createGroupChannel = async (groupChannelName, currentUserID, ...mem
   }
 };
 
+export const getChannelMembers = async (channelID) => {
+  try {
+    const response = await API.get(`/api/channels/${channelID}/members`);
+    return response.data.members;
+  } catch (error) {
+    console.error("[getChannelMembers] Lỗi khi lấy danh sách thành viên:", error);
+    throw error;
+  }
+};
+
+// Thêm thành viên vào kênh
+export const addChannelMember = async (channelID, memberID) => {
+  try {
+    const response = await API.put(`/api/channels/${channelID}/members/${memberID}`);
+    return response.data;
+  } catch (error) {
+    console.error("[addChannelMember] Lỗi khi thêm thành viên:", error);
+    throw error;
+  }
+};
+
+// Xóa thành viên khỏi kênh
+export const removeChannelMember = async (channelID, memberID) => {
+  try {
+    const response = await API.delete(`/api/channels/${channelID}/members/${memberID}`);
+    return response.data;
+  } catch (error) {
+    console.error("[removeChannelMember] Lỗi khi xóa thành viên:", error);
+    throw error;
+  }
+};
+
+// Thành viên rời khỏi kênh
+export const leaveChannel = async (channelID, memberID) => {
+  try {
+    const response = await API.post(`/api/channels/${channelID}/leave/${memberID}`);
+    return response.data;
+  } catch (error) {
+    console.error("[leaveChannel] Lỗi khi rời khỏi kênh:", error);
+    throw error;
+  }
+};
+
+// Giải tán kênh (Leader)
+export const dissolveChannel = async (channelID, leaderID) => {
+  try {
+    const response = await API.delete(`/api/channels/${channelID}/dissolve/${leaderID}`);
+    return response.data;
+  } catch (error) {
+    console.error("[dissolveChannel] Lỗi khi giải tán kênh:", error);
+    throw error;
+  }
+};
+
+// Chặn thành viên
+export const blockMember = async (channelID, blockerID, memberID) => {
+  try {
+    const response = await API.post(`/api/channels/${channelID}/block/${blockerID}/${memberID}`);
+    return response.data;
+  } catch (error) {
+    console.error("[blockMember] Lỗi khi chặn thành viên:", error);
+    throw error;
+  }
+};
+
+// Bỏ chặn thành viên
+export const unblockMember = async (channelID, unblockerID, memberID) => {
+  try {
+    const response = await API.post(`/api/channels/${channelID}/unblock/${unblockerID}/${memberID}`);
+    return response.data;
+  } catch (error) {
+    console.error("[unblockMember] Lỗi khi bỏ chặn thành viên:", error);
+    throw error;
+  }
+};
+
 // Tìm kênh riêng tư giữa hai người dùng
 export const searchPrivateChannel = async (member1, member2) => {
   try {
@@ -460,3 +536,4 @@ export const updateCoverPhoto = async (userID, file) => {
   });
   return res.data;
 };
+
