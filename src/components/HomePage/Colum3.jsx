@@ -9,6 +9,9 @@ import {
   connectWebSocket,
   sendWebSocketMessage,
   getChannelMembers,
+  // 2 API dưới đây cần có trong services/api.js
+  recallMessage,
+  hideMessageForMe,
 } from "../../services/api";
 import { BsThreeDotsVertical } from "react-icons/bs";
 import ChannelMenu from "../Channel/ChannelMenu";
@@ -28,15 +31,39 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
   const [myRole, setMyRole] = useState("Member");
   const [modal, setModal] = useState({ type: null, data: null });
 
+  // ----- context menu -----
+  const [ctxMenu, setCtxMenu] = useState({
+    visible: false,
+    x: 0,
+    y: 0,
+    message: null,
+  });
+
   const me = sessionStorage.getItem("userID");
   const scrollBottomRef = useRef(null);
+  const listRef = useRef(null); // khung cuộn tin nhắn
 
-  // --- Auto scroll xuống cuối khi có tin nhắn mới ---
+  // Auto scroll
   useEffect(() => {
     scrollBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // --- Điều hướng dữ liệu theo mode/option ---
+  // Đóng context menu khi click ngoài / ESC
+  useEffect(() => {
+    const onDocClick = () => setCtxMenu((s) => ({ ...s, visible: false, message: null }));
+    const onEsc = (e) => {
+      if (e.key === "Escape") onDocClick();
+    };
+    document.addEventListener("click", onDocClick);
+    document.addEventListener("keydown", onEsc);
+    // KHÔNG add listener cho 'contextmenu' nữa, kẻo vừa mở đã bị đóng
+    return () => {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, []);
+
+  // Điều hướng dữ liệu theo mode/option
   useEffect(() => {
     if (mode === "friends") {
       setLoading(true);
@@ -55,7 +82,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, selectedOption, currentChannel]);
 
-  // --- WebSocket realtime theo kênh đang mở ---
+  // WebSocket realtime
   useEffect(() => {
     if (!currentChannel) return;
     const currentId = currentChannel.id || currentChannel.channelID;
@@ -64,6 +91,19 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
       if (!incoming?.channelId) return;
       if (incoming.channelId !== currentId) return;
 
+      // Nếu là sự kiện recall
+      if (incoming.type === "message_recalled") {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === incoming.messageId
+              ? { ...m, recalled: true, content: "" }
+              : m
+          )
+        );
+        return; // dừng, không chuẩn hoá như message thường
+      }
+
+      // Nếu là tin nhắn thường
       const standardizedMessage = {
         id: incoming.id || Math.random().toString(36).substring(7),
         content: incoming.content ?? "",
@@ -85,7 +125,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     return () => ws.close();
   }, [currentChannel]);
 
-  // --- API: Messages ---
+  // API: Messages
   const fetchMessages = async (channelID) => {
     try {
       const userID = sessionStorage.getItem("userID");
@@ -120,14 +160,76 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     }
   };
 
-  // --- API: Friends ---
+  // Helpers
+  const isMine = (msg) => msg?.senderId?.toString() === me?.toString();
+
+  // Mở menu tại vị trí chuột phải (theo toạ độ của khung cuộn listRef)
+  const openMessageMenu = (e, msg) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const host = listRef.current;
+    if (!host) return;
+
+    const hostRect = host.getBoundingClientRect();
+    let x = e.clientX - hostRect.left + host.scrollLeft;
+    let y = e.clientY - hostRect.top + host.scrollTop;
+
+    const menuWidth = 190;
+    const menuHeight = 80;
+
+    if (x + menuWidth > host.scrollWidth) x = host.scrollWidth - menuWidth - 10;
+    if (y + menuHeight > host.scrollHeight) y = host.scrollHeight - menuHeight - 10;
+
+    setCtxMenu({ visible: true, x, y, message: msg });
+  };
+
+  const handleRecall = async () => {
+    if (!ctxMenu.message?.id) return;
+    try {
+      await recallMessage(ctxMenu.message.id);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === ctxMenu.message.id ? { ...m, recalled: true, content: "" } : m
+        )
+      );
+    } catch (err) {
+      alert(err?.message || "Không thể thu hồi tin nhắn");
+    } finally {
+      setCtxMenu((s) => ({ ...s, visible: false, message: null }));
+    }
+  };
+
+  // Thời gian cho phép thu hồi tin nhắn (2 phút)
+  const RECALL_WINDOW_MS = 2 * 60 * 1000;
+
+  // Kiểm tra tin nhắn có hết hạn thu hồi chưa
+  const isRecallExpired = (msg) => {
+    if (!msg?.timestamp) return true;
+    const msgTime = new Date(msg.timestamp).getTime();
+    return Date.now() - msgTime > RECALL_WINDOW_MS;
+  };
+
+  const handleHideForMe = async () => {
+    if (!ctxMenu.message?.id) return;
+    try {
+      await hideMessageForMe(ctxMenu.message.id);
+      setMessages((prev) => prev.filter((m) => m.id !== ctxMenu.message.id));
+    } catch (err) {
+      alert(err?.message || "Không thể xóa tin nhắn phía bạn");
+    } finally {
+      setCtxMenu((s) => ({ ...s, visible: false, message: null }));
+    }
+  };
+
+  // API: Friends
   const fetchFriends = async () => {
     try {
       const userId = sessionStorage.getItem("userID");
       const res = await getFriends(userId);
       setFriends(Array.isArray(res) ? res : []);
       setFriendsError("");
-    } catch (err) {
+    } catch {
       setFriends([]);
       setFriendsError("Không thể tải danh sách.");
     } finally {
@@ -135,14 +237,13 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     }
   };
 
-  // --- API: Friend Requests ---
   const fetchFriendRequests = async () => {
     try {
       const userId = sessionStorage.getItem("userID");
       const res = await getFriendRequests(userId);
       setFriendRequests(Array.isArray(res) ? res : []);
       setFriendRequestsError("");
-    } catch (err) {
+    } catch {
       setFriendRequests([]);
       setFriendRequestsError("Không thể tải danh sách lời mời kết bạn.");
     } finally {
@@ -155,7 +256,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     try {
       await acceptFriendRequest(userID, friendID);
       setFriendRequests((prev) => prev.filter((r) => r.friendID !== friendID));
-    } catch (error) {}
+    } catch {}
   };
 
   const handleDeclineFriendRequest = async (friendID) => {
@@ -163,7 +264,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     try {
       await declineFriendRequest(userID, friendID);
       setFriendRequests((prev) => prev.filter((r) => r.friendID !== friendID));
-    } catch (error) {
+    } catch {
       alert("Không thể từ chối lời mời kết bạn.");
     }
   };
@@ -173,19 +274,17 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     try {
       await removeFriend(userID, friendID);
       setFriends((prev) => prev.filter((f) => f.friendID !== friendID));
-    } catch (error) {
+    } catch {
       alert("Không thể xóa bạn.");
     }
   };
 
   const handleOpenMenu = async () => {
     if (!currentChannel?.channelID) return;
-
     try {
       const members = await getChannelMembers(currentChannel.channelID);
       const me = sessionStorage.getItem("userID");
       const myMember = members.find((m) => m.MemberID === me);
-      console.log("[handleOpenMenu]Channel members:", members);
       setMyRole(myMember?.Role || "Member");
       setMenuOpen(true);
     } catch (err) {
@@ -194,7 +293,6 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     }
   };
 
-  // --- Xử lý khi chọn action từ menu ---
   const handleChannelAction = (action) => {
     switch (action) {
       case "addMember":
@@ -217,7 +315,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     }
   };
 
-  // ---------------- UI RENDER ----------------
+  // UI
   const renderChatWindow = () => (
     <div className="flex h-full flex-col rounded-xl p-4 bg-gradient-to-br from-black via-purple-900 to-black shadow-[0_0_20px_#a855f7]">
       {/* Header */}
@@ -249,15 +347,23 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto space-y-2 p-2 rounded-lg bg-black/30 backdrop-blur-sm">
+      <div
+        ref={listRef}
+        className="relative flex-1 overflow-y-auto space-y-2 p-2 rounded-lg bg-black/30 backdrop-blur-sm"
+      >
         {messagesError && <p className="text-red-400 text-sm">{messagesError}</p>}
         {messages.length > 0 ? (
           messages.map((msg) => {
-            const mine = msg.senderId?.toString() === me?.toString();
+            const mine = isMine(msg);
+            const isRecalled = !!msg.recalled;
             return (
-              <div key={msg.id || msg.timestamp} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+              <div
+                key={msg.id || msg.timestamp}
+                className={`flex ${mine ? "justify-end" : "justify-start"}`}
+                onContextMenu={(e) => openMessageMenu(e, msg)}
+              >
                 <div className="max-w-[70%] flex items-start gap-2">
-                  {!mine && (
+                  {!mine && !isRecalled && (
                     <img
                       src={msg.senderAvatar || "/default-avatar.png"}
                       alt="avatar"
@@ -265,19 +371,23 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                     />
                   )}
                   <div
-                    className={`px-3 py-2 rounded-2xl text-sm text-white shadow transition
+                    className={`px-3 py-2 rounded-2xl text-sm text-white shadow transition select-text
                       ${
                         mine
                           ? "bg-gradient-to-r from-fuchsia-600 via-purple-600 to-blue-600 shadow-[0_0_12px_#a855f7]"
                           : "bg-purple-700/30 border border-purple-500/40"
-                      }`}
+                      } ${isRecalled ? "opacity-70" : ""}`}
                   >
-                    {!mine && (
+                    {!mine && !isRecalled && (
                       <div className="text-xs text-purple-300 font-semibold mb-0.5">
                         {msg.senderName || "Người gửi"}
                       </div>
                     )}
-                    <div className="break-words">{msg.content}</div>
+                    {isRecalled ? (
+                      <div className="italic text-gray-200">Tin nhắn đã được thu hồi</div>
+                    ) : (
+                      <div className="break-words">{msg.content}</div>
+                    )}
                     <div className="text-[10px] text-gray-300 mt-1 text-right">
                       {new Date(msg.timestamp).toLocaleTimeString()}
                     </div>
@@ -289,6 +399,51 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
         ) : (
           <p className="text-gray-400 italic">Chưa có tin nhắn</p>
         )}
+
+        {/* Context menu tin nhắn */}
+        {ctxMenu.visible && ctxMenu.message && (
+          <div
+            className="absolute z-50 min-w-[190px] rounded-lg border border-purple-600/40 bg-[#1a1426] shadow-xl p-1"
+            style={{ left: ctxMenu.x, top: ctxMenu.y }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              className={`w-full text-left px-3 py-2 rounded-md hover:bg-purple-700/30
+                ${
+                  isMine(ctxMenu.message)
+                    ? isRecallExpired(ctxMenu.message)
+                      ? "text-gray-400 cursor-not-allowed opacity-60" // hết hạn → xám + khóa
+                      : "text-red-400 font-semibold" // còn hạn → đỏ đậm để nhấn mạnh
+                    : "text-gray-400 cursor-not-allowed"
+                }
+                ${ctxMenu.message.recalled ? "opacity-60 cursor-not-allowed" : ""}`}
+              onClick={
+                isMine(ctxMenu.message) &&
+                !ctxMenu.message.recalled &&
+                !isRecallExpired(ctxMenu.message)
+                  ? handleRecall
+                  : undefined
+              }
+              disabled={
+                !isMine(ctxMenu.message) ||
+                ctxMenu.message.recalled ||
+                isRecallExpired(ctxMenu.message)
+              }
+            >
+              {isRecallExpired(ctxMenu.message)
+                ? "Thu hồi (hết hạn)"
+                : "Thu hồi tin nhắn"}
+            </button>
+
+            <button
+              className="w-full text-left px-3 py-2 rounded-md hover:bg-purple-700/30 text-white"
+              onClick={handleHideForMe}
+            >
+              Xóa tin nhắn phía bạn
+            </button>
+          </div>
+        )}
+
         <div ref={scrollBottomRef} />
       </div>
 
@@ -417,7 +572,6 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
         )
       ) : null}
 
-      {/* Modal quản lý kênh */}
       <ChannelModal
         modal={modal}
         currentChannel={currentChannel}

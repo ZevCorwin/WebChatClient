@@ -100,6 +100,17 @@ export const sendWebSocketMessage = (channelID, content, messageType = "Text") =
   return message;
 };
 
+// --- Message actions ---
+export const recallMessage = async (messageID) => {
+  const res = await API.post(`/api/messages/${messageID}/recall`);
+  return res.data;
+};
+
+export const hideMessageForMe = async (messageID) => {
+  const res = await API.delete(`/api/messages/${messageID}/hide`);
+  return res.data;
+};
+
 // Hàm kiểm tra kết nối server
 const pingServer = async () => {
   try {
@@ -320,6 +331,16 @@ export const getChannelMembers = async (channelID) => {
   }
 };
 
+export const getBlockedMembers = async (channelID) => {
+  try {
+    const response = await API.get(`/api/channels/${channelID}/blocked-members`);
+    return response.data;
+  } catch (error) {
+    console.error("[getBlockedMembers] Lỗi khi lấy danh sách thành viên bị chặn:", error);
+    throw error;
+  }
+};
+
 // Thêm thành viên vào kênh
 export const addChannelMember = async (channelID, memberID) => {
   try {
@@ -365,9 +386,9 @@ export const dissolveChannel = async (channelID, leaderID) => {
 };
 
 // Chặn thành viên
-export const blockMember = async (channelID, blockerID, memberID) => {
+export const blockMember = async (channelID, memberID) => {
   try {
-    const response = await API.post(`/api/channels/${channelID}/block/${blockerID}/${memberID}`);
+    const response = await API.post(`/api/channels/${channelID}/block/${memberID}`);
     return response.data;
   } catch (error) {
     console.error("[blockMember] Lỗi khi chặn thành viên:", error);
@@ -378,7 +399,7 @@ export const blockMember = async (channelID, blockerID, memberID) => {
 // Bỏ chặn thành viên
 export const unblockMember = async (channelID, unblockerID, memberID) => {
   try {
-    const response = await API.post(`/api/channels/${channelID}/unblock/${unblockerID}/${memberID}`);
+    const response = await API.post(`/api/channels/${channelID}/unblock/${memberID}`);
     return response.data;
   } catch (error) {
     console.error("[unblockMember] Lỗi khi bỏ chặn thành viên:", error);

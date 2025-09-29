@@ -9,7 +9,8 @@ import {
   unblockMember,
   leaveChannel,
   dissolveChannel,
-  getUserByID,          // <-- thêm import
+  getUserByID,    
+  getBlockedMembers,
 } from "../../services/api";
 
 const ChannelModal = ({ modal, currentChannel, onClose }) => {
@@ -101,6 +102,26 @@ const ChannelModal = ({ modal, currentChannel, onClose }) => {
     }
   }, [modal.type, currentChannel]);
 
+  // --- Load danh sách thành viên bị chặn ---
+  useEffect(() => {
+    if (modal.type === "blockedList" && currentChannel?.channelID) {
+      const fetchBlocked = async () => {
+        try {
+          const res = await getBlockedMembers(currentChannel.channelID);
+          console.log("[ChannelModal][blockedList] blocked:", res);
+          // BE trả {blocked: [...]}, nên bạn cần lấy đúng
+          // ✅ lấy đúng mảng từ object trả về
+          setBlocked(Array.isArray(res.blockedMembers) ? res.blockedMembers : []);
+          console.log("[ChannelModal][blockedList] setBlocked:", res);
+        } catch (err) {
+          console.error("[ChannelModal][blockedList] Lỗi:", err);
+          setBlocked([]);
+        }
+      };
+      fetchBlocked();
+    }
+  }, [modal.type, currentChannel]);
+
   // --- Tìm kiếm theo số điện thoại ---
   const handleSearch = async () => {
     if (!searchTerm.trim()) return;
@@ -139,6 +160,8 @@ const ChannelModal = ({ modal, currentChannel, onClose }) => {
   const handleRemoveMember = async (memberID) => {
     try {
       await removeChannelMember(currentChannel.channelID, memberID);
+      // Cập nhật lại danh sách tại FE
+      setHydratedMembers((prev) => prev.filter((m) => m.MemberID !== memberID));  
       alert("Đã xóa thành viên!");
       setHydratedMembers((prev) => prev.filter((m) => m.MemberID !== memberID));
     } catch (err) {
@@ -148,7 +171,10 @@ const ChannelModal = ({ modal, currentChannel, onClose }) => {
 
   const handleBlockMember = async (memberID) => {
     try {
-      await blockMember(currentChannel.channelID, me, memberID);
+      await blockMember(currentChannel.channelID, memberID);
+      // Cập nhật UI: xóa khỏi danh sách + thêm vào blocked
+      setHydratedMembers((prev) => prev.filter((m) => m.MemberID !== memberID));
+      setBlocked((prev) => [...prev, { MemberID: memberID }]);
       alert("Đã chặn thành viên!");
     } catch (err) {
       alert("Không thể chặn thành viên.");
@@ -159,7 +185,7 @@ const ChannelModal = ({ modal, currentChannel, onClose }) => {
     try {
       await unblockMember(currentChannel.channelID, me, memberID);
       alert("Đã bỏ chặn!");
-      setBlocked((prev) => prev.filter((m) => m.MemberID !== memberID));
+      setBlocked((prev) => prev.filter((m) => m.memberId !== memberID));
     } catch (err) {
       alert("Không thể bỏ chặn.");
     }
@@ -349,10 +375,25 @@ const ChannelModal = ({ modal, currentChannel, onClose }) => {
             <ul className="space-y-2">
               {blocked.length > 0 ? (
                 blocked.map((m) => (
-                  <li key={m.MemberID} className="flex justify-between">
-                    <span>{m.MemberName || m.MemberID}</span>
+                  <li
+                    key={m.memberId}
+                    className="flex items-center justify-between bg-gray-800 p-2 rounded"
+                  >
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={m.avatar || "/default-avatar.png"}
+                        alt={m.name}
+                        className="w-8 h-8 rounded-full object-cover border border-purple-600"
+                      />
+                      <div className="leading-tight">
+                        <div className="font-semibold">{m.name}</div>
+                        {m.phone && (
+                          <div className="text-xs text-gray-400">{m.phone}</div>
+                        )}
+                      </div>
+                    </div>
                     <button
-                      onClick={() => handleUnblockMember(m.MemberID)}
+                      onClick={() => handleUnblockMember(m.memberId)}
                       className="px-2 py-1 bg-green-600 rounded text-white"
                     >
                       Bỏ chặn

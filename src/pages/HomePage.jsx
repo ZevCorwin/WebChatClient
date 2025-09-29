@@ -19,6 +19,21 @@ const HomePage = () => {
     } 
   }, [mode]);
 
+  // Load lại channel khi F5
+  useEffect(() => {
+    const saved = sessionStorage.getItem("currentChannel");
+    if (saved) {
+      setCurrentChannel(JSON.parse(saved));
+    }
+  }, []);
+
+  // Lưu channel mỗi khi đổi
+  useEffect(() => {
+    if (currentChannel) {
+      sessionStorage.setItem("currentChannel", JSON.stringify(currentChannel));
+    }
+  }, [currentChannel]);
+
   const handleModeChange = (newMode) => {
     console.log(`Đang ở chế độ ${newMode}`);
     setMode(newMode);
