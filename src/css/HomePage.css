@@ -317,3 +317,15 @@
 .chat-window .messages::-webkit-scrollbar-track {
   background-color: #f8f9fa;
 }
+
+.voice-message {
+  background: rgba(168, 85, 247, 0.1);
+  border-radius: 10px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.voice-message audio {
+  flex: 1;
+}

@@ -12,6 +12,7 @@ import {
   // 2 API dưới đây cần có trong services/api.js
   recallMessage,
   hideMessageForMe,
+  uploadFile,
 } from "../../services/api";
 import { BsThreeDotsVertical } from "react-icons/bs";
 import ChannelMenu from "../Channel/ChannelMenu";
@@ -26,10 +27,28 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
   const [messages, setMessages] = useState([]);
   const [messagesError, setMessagesError] = useState("");
   const [newMessage, setNewMessage] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
   const [newMessageError, setNewMessageError] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [myRole, setMyRole] = useState("Member");
   const [modal, setModal] = useState({ type: null, data: null });
+  // --- ghi âm ---
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const [recordingStart, setRecordingStart] = useState(null);
+  const [recordingMs, setRecordingMs] = useState(0);
+  // --- xem lại voice trước khi gửi ---
+  const [recordedBlob, setRecordedBlob] = useState(null);
+  const [recordedUrl, setRecordedUrl] = useState(null);
+  const audioRef = useRef(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const mediaStreamRef = useRef(null);
+  const chunksRef = useRef([]);
+  const canvasRef = useRef(null);
+  const [audioContext, setAudioContext] = useState(null);
+  const analyserRef = useRef(null);
+  const rafRef = useRef(null);
 
   // ----- context menu -----
   const [ctxMenu, setCtxMenu] = useState({
@@ -42,6 +61,26 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
   const me = sessionStorage.getItem("userID");
   const scrollBottomRef = useRef(null);
   const listRef = useRef(null); // khung cuộn tin nhắn
+
+  const isImage = (f) => f && /^image\//i.test(f.type);
+  const formatDuration = (ms) => {
+    const sec = Math.floor(ms / 1000);
+    const m = String(Math.floor(sec / 60)).padStart(2, "0");
+    const s = String(sec % 60).padStart(2, "0");
+    return `${m}:${s}`;
+  };
+
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.src = recordedUrl || "";
+  }, [recordedUrl]);
+
+  useEffect(() => {
+    if (!isRecording || !recordingStart) return;
+    const t = setInterval(() => setRecordingMs(Date.now() - recordingStart), 200);
+    return () => clearInterval(t);
+  }, [isRecording, recordingStart]);
 
   // Auto scroll
   useEffect(() => {
@@ -146,19 +185,254 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
   };
 
   const handleSendMessage = async () => {
-    if (!newMessage.trim()) return;
     if (!currentChannel || (!currentChannel.id && !currentChannel.channelID)) {
-      setMessagesError("Không thể gửi tin nhắn: kênh không hợp lệ.");
+      setNewMessageError("Không thể gửi: kênh không hợp lệ.");
       return;
     }
+
     try {
-      await sendWebSocketMessage(currentChannel.id || currentChannel.channelID, newMessage, "Text");
+      if (recordedBlob) {
+        const voiceFile = new File([recordedBlob], `voice-${Date.now()}.webm`, { type: "audio/webm" });
+        const uploaded = await uploadFile(voiceFile);
+        await sendWebSocketMessage(
+          currentChannel.id || currentChannel.channelID, 
+          uploaded.url, 
+          "Voice"
+        );
+        // reset voice preview
+        discardRecorded();
+        setNewMessageError("");
+        return;
+      }
+
+      // 1) Nếu đang có file đã chọn → upload & gửi File
+      if (selectedFile) {
+        const uploaded = await uploadFile(selectedFile);
+        await sendWebSocketMessage(
+          currentChannel.id || currentChannel.channelID,
+          uploaded.url,
+          "File"
+        );
+        setSelectedFile(null);
+        setPreviewUrl(null);
+        setNewMessageError("");
+        return;
+      }
+
+      // 2) Nếu là text
+      if (!newMessage.trim()) return;
+      await sendWebSocketMessage(
+        currentChannel.id || currentChannel.channelID,
+        newMessage,
+        "Text"
+      );
       setNewMessage("");
       setNewMessageError("");
     } catch (err) {
-      setNewMessageError("Không thể gửi tin nhắn.");
+      setNewMessageError("Không thể gửi.");
     }
   };
+
+  // Khi chọn file
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // ✅ Check 25MB (khớp BE MaxBytesReader 25MB)
+    const MAX = 25 * 1024 * 1024; // 25MB
+    if (file.size > MAX) {
+      alert("Kích thước file vượt quá 25MB!");
+      // reset input để có thể chọn lại cùng file
+      e.target.value = "";
+      return;
+    }
+
+    setSelectedFile(file);
+    setPreviewUrl(URL.createObjectURL(file));
+
+    // ✅ reset giá trị input để lần sau chọn lại cùng file vẫn trigger onChange
+    e.target.value = "";
+  };
+
+  const handlePaste = (e) => {
+    const items = e.clipboardData?.items || [];
+    for (const it of items) {
+      if (it.kind === "file") {
+        const blob = it.getAsFile();
+        if (blob && /^image\//i.test(blob.type)) {
+          const file = new File([blob], `paste-${Date.now()}.png`, { type: blob.type });
+          setSelectedFile(file);
+          setPreviewUrl(URL.createObjectURL(file));
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+
+      // --- Tạo AudioContext và Analyser ---
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      await audioCtx.resume();
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+      setAudioContext(audioCtx);
+
+      // --- Hàm vẽ waveform ---
+      const drawVisualizer = () => {
+        const canvas = canvasRef.current;
+        const ctx = canvas?.getContext("2d");
+        if (!canvas || !ctx) {
+          rafRef.current = requestAnimationFrame(drawVisualizer);
+          return;
+        }
+
+        const width = canvas.width;
+        const height = canvas.height;
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteTimeDomainData(dataArray);
+
+        // nền tối
+        ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+        ctx.fillRect(0, 0, width, height);
+
+        // đường giữa (nếu im lặng vẫn thấy)
+        ctx.strokeStyle = "rgba(168,85,247,0.25)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, height / 2);
+        ctx.lineTo(width, height / 2);
+        ctx.stroke();
+
+        // waveform
+        ctx.strokeStyle = "#a855f7";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+
+        const sliceWidth = width / dataArray.length;
+        let x = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const v = dataArray[i] / 128.0;
+          const y = (v * height) / 2;
+          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          x += sliceWidth;
+        }
+        ctx.lineTo(width, height / 2);
+        ctx.stroke();
+
+        rafRef.current = requestAnimationFrame(drawVisualizer);
+      };
+
+      // bắt đầu vẽ
+      rafRef.current = requestAnimationFrame(drawVisualizer);
+
+      // --- Tạo MediaRecorder ---
+      const mr = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+      mediaRecorderRef.current = mr;
+
+      chunksRef.current = [];
+      setRecordingMs(0);
+      setRecordingStart(Date.now());
+      setRecordedBlob(null);
+      setRecordedUrl(null);
+      setIsRecording(true);
+
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      mr.onstop = () => {
+        try {
+          // dừng animation
+          if (rafRef.current) {
+            cancelAnimationFrame(rafRef.current);
+            rafRef.current = null;
+          }
+
+          const blob = new Blob(chunksRef.current, { type: "audio/webm;codecs=opus" });
+          if (blob.size > 0) {
+            setRecordedBlob(blob);
+            setRecordedUrl(URL.createObjectURL(blob));
+          }
+        } finally {
+          mediaStreamRef.current?.getTracks()?.forEach((t) => t.stop());
+          audioCtx.close();
+          setAudioContext(null);
+          setIsRecording(false);
+          setRecordingStart(null);
+        }
+      };
+
+      mr.start(200);
+    } catch (err) {
+      console.error("Không truy cập được micro:", err);
+      alert("Không truy cập được micro. Vui lòng kiểm tra quyền.");
+    }
+  };
+
+
+  const stopRecording = () => {
+    try {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      mediaRecorderRef.current?.stop();
+    } catch (err) {
+      console.error("Lỗi khi dừng ghi:", err);
+    }
+  };
+
+  const discardRecorded = () => {
+    if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+    setRecordedBlob(null);
+    setRecordedUrl(null);
+    setIsPlaying(false);
+
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+
+    if (audioContext) {
+      audioContext.close();
+      setAudioContext(null);
+    }
+  };
+
+  const togglePlayPreview = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (a.paused) {
+      a.play();
+    } else {
+      a.pause();
+    }
+  };
+
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    const onEnded = () => setIsPlaying(false);
+    a.addEventListener("play", onPlay);
+    a.addEventListener("pause", onPause);
+    a.addEventListener("ended", onEnded);
+    return () => {
+      a.removeEventListener("play", onPlay);
+      a.removeEventListener("pause", onPause);
+      a.removeEventListener("ended", onEnded);
+    };
+  }, [recordedUrl]);
 
   // Helpers
   const isMine = (msg) => msg?.senderId?.toString() === me?.toString();
@@ -383,10 +657,51 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                         {msg.senderName || "Người gửi"}
                       </div>
                     )}
+                    {/* nội dung tin nhắn */}
                     {isRecalled ? (
-                      <div className="italic text-gray-200">Tin nhắn đã được thu hồi</div>
+                      <div className="italic text-gray-400">Tin nhắn đã được thu hồi</div>
+                    ) : msg.messageType === "Voice" && msg.url ? (
+                      <div className="flex flex-col items-start">
+                        <audio
+                          src={msg.url}
+                          controls
+                          className="w-56 rounded-md border border-purple-400 mt-1"
+                        />
+                        <span className="text-[11px] text-gray-400 mt-1">
+                          🎤 Voice message • {new Date(msg.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    ) : msg.messageType === "File" && msg.url ? (
+                      msg.url.match(/\.(jpg|jpeg|png|gif)$/i) ? (
+                        <img
+                          src={msg.url}
+                          alt="Ảnh"
+                          className="rounded-lg max-w-[220px] mt-1 border border-purple-500/30"
+                        />
+                      ) : msg.url.match(/\.(mp4|webm)$/i) ? (
+                        <video
+                          src={msg.url}
+                          controls
+                          className="rounded-lg max-w-[240px] mt-1 border border-purple-500/30"
+                        />
+                      ) : msg.url.match(/\.(mp3|wav)$/i) ? (
+                        <audio
+                          src={msg.url}
+                          controls
+                          className="w-56 rounded-md border border-purple-400 mt-1"
+                        />
+                      ) : (
+                        <a
+                          href={msg.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 px-2 py-1 mt-1 rounded-md border border-purple-500/30 hover:bg-purple-700/20 transition"
+                        >
+                          📎 <span className="text-blue-300 break-all">{msg.url.split("/").pop()}</span>
+                        </a>
+                      )
                     ) : (
-                      <div className="break-words">{msg.content}</div>
+                      <div className="break-words text-white">{msg.content}</div>
                     )}
                     <div className="text-[10px] text-gray-300 mt-1 text-right">
                       {new Date(msg.timestamp).toLocaleTimeString()}
@@ -448,22 +763,133 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
       </div>
 
       {/* Input */}
-      <div className="mt-3 flex items-center gap-2">
-        {newMessageError && <p className="text-red-400 text-sm">{newMessageError}</p>}
-        <input
-          type="text"
-          placeholder="Nhập tin nhắn..."
-          value={newMessage}
-          onChange={(e) => setNewMessage(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-          className="flex-1 px-4 py-2 rounded-xl bg-white/10 text-white placeholder-gray-400 border border-purple-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500"
-        />
-        <button
-          onClick={handleSendMessage}
-          className="px-4 py-2 bg-gradient-to-r from-fuchsia-500 via-purple-600 to-blue-600 rounded-xl text-white font-bold shadow hover:scale-105 hover:shadow-[0_0_15px_#a855f7] transition-transform"
-        >
-          Gửi
-        </button>
+      <div className="mt-3 w-full">
+        {newMessageError && (
+          <p className="text-red-400 text-sm mb-2">{newMessageError}</p>
+        )}
+
+        {selectedFile && isImage(selectedFile) && previewUrl && (
+          <div className="mb-2">
+            <div className="bg-black/40 border border-purple-600/40 rounded-xl p-2">
+              <img src={previewUrl} alt="preview" className="max-h-48 rounded-lg" />
+              <div className="flex gap-2 mt-2">
+                <button
+                  onClick={() => { setSelectedFile(null); setPreviewUrl(null); }}
+                  className="px-2 py-1 text-sm rounded-md bg-red-600/70 hover:bg-red-600 text-white"
+                >
+                  Hủy ảnh
+                </button>
+                <button
+                  onClick={handleSendMessage}
+                  className="px-2 py-1 text-sm rounded-md bg-purple-600 hover:bg-purple-700 text-white"
+                >
+                  Gửi ảnh
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* === VOICE MODE === */}
+        {(isRecording || recordedBlob) ? (
+          <div className="w-full rounded-xl border border-purple-500 bg-white/10 p-3 flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              {isRecording && (
+                <canvas
+                  ref={canvasRef}
+                  width={400}
+                  height={60}
+                  className="w-full h-[60px] rounded-md bg-black/40 border border-purple-500"
+                />
+              )}
+              <div className={`px-2 py-1 rounded-lg text-xs ${
+                isRecording ? "bg-red-500/20 text-red-200" : "bg-purple-500/20 text-purple-200"
+              }`}>
+                
+                {isRecording ? "Đang ghi" : "Xem lại"} • {formatDuration(recordingMs)}
+              </div>
+
+              {isRecording && (
+                <button
+                  onClick={stopRecording}
+                  className="px-3 py-2 rounded-lg border border-red-400 text-red-300 hover:text-white"
+                  title="Dừng ghi"
+                >
+                  ■
+                </button>
+              )}
+
+              {recordedUrl && !isRecording && (
+                <>
+                  <audio ref={audioRef} preload="metadata" controls className="hidden" />
+                  {/* hoặc hiển thị controls nếu bạn muốn */}
+                  <audio preload="metadata" className="hidden">
+                    <source src={recordedUrl} type="audio/webm;codecs=opus" />
+                  </audio>
+                  <button
+                    onClick={togglePlayPreview}
+                    className="px-3 py-2 rounded-lg border border-purple-400 text-purple-200 hover:text-white"
+                    title={isPlaying ? "Tạm dừng" : "Phát lại"}
+                  >
+                    {isPlaying ? "⏸" : "▶"}
+                  </button>
+                </>
+              )}
+
+              <button
+                onClick={discardRecorded}
+                className="ml-auto px-3 py-2 rounded-lg border border-gray-400 text-gray-200 hover:text-white"
+                title="Xoá bản ghi"
+              >
+                ✕
+              </button>
+
+              <button
+                onClick={handleSendMessage}
+                className="px-3 py-2 bg-gradient-to-r from-fuchsia-500 via-purple-600 to-blue-600 rounded-xl text-white font-bold hover:scale-105 hover:shadow-[0_0_15px_#a855f7]"
+                title="Gửi voice"
+              >
+                ➤
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* === TEXT/FILE MODE ===  — chỉ 1 lớp, full width */
+          <div className="w-full flex items-center gap-2 rounded-xl bg-white/10 border border-purple-500 px-3 py-2">
+            <input
+              type="text"
+              placeholder="Nhập tin nhắn..."
+              value={newMessage}
+              onChange={(e) => setNewMessage(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+              onPaste={handlePaste}
+              className="flex-1 bg-transparent text-white placeholder-gray-400 focus:outline-none"
+            />
+            <label className="cursor-pointer text-purple-300 hover:text-white" title="Đính kèm">
+              📎
+              <input
+                type="file"
+                onChange={handleFileChange}
+                className="hidden"
+                accept="image/*,video/*,audio/*,application/pdf"
+              />
+            </label>
+            <button
+              onClick={startRecording}
+              className="px-2 py-2 rounded-lg border border-purple-500 text-purple-300 hover:text-white"
+              title="Ghi âm"
+            >
+              🎤
+            </button>
+            <button
+              onClick={handleSendMessage}
+              className="px-3 py-2 bg-gradient-to-r from-fuchsia-500 via-purple-600 to-blue-600 rounded-xl text-white font-bold hover:scale-105 hover:shadow-[0_0_15px_#a855f7]"
+              title="Gửi"
+            >
+              ➤
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

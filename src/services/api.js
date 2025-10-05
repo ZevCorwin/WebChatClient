@@ -558,3 +558,20 @@ export const updateCoverPhoto = async (userID, file) => {
   return res.data;
 };
 
+// --- Upload file đính kèm tin nhắn ---
+export const uploadFile = async (file) => {
+  if (!file) throw new Error("Chưa chọn file để tải lên.");
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const res = await API.post("/uploads", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    return res.data; // { id, url, mime, size, fileType }
+  } catch (error) {
+    console.error("[uploadFile] Lỗi tải file:", error);
+    throw new Error(error.response?.data?.error || "Không thể tải file lên.");
+  }
+};
