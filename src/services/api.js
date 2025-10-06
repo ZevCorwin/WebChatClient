@@ -73,9 +73,11 @@ export const connectWebSocket = (onMessageReceived) => {
   return ws;
 };
 
-export const sendWebSocketMessage = (channelID, content, messageType = "Text") => {
+// Cho phép gửi kèm replyTo + attachments (nếu có)
+export const sendWebSocketMessage = (channelID, content, messageType = "Text", replyTo = null, attachments = []) => {
   const token = sessionStorage.getItem("token");
   if (!token) throw new Error("No token");
+
   let userID;
   try {
     const decoded = jwtDecode(token);
@@ -85,19 +87,42 @@ export const sendWebSocketMessage = (channelID, content, messageType = "Text") =
     console.error("[sendWebSocketMessage]Invalid token:", error);
     throw new Error("Invalid token");
   }
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    console.error("[sendWebSocketMessage]WebSocket is not connected");
-    throw new Error("WebSocket is not connected");
+
+  if (!ws) {
+    console.error("[sendWebSocketMessage]WebSocket is not initialized");
+    throw new Error("WebSocket is not initialized");
   }
-  const message = {
+
+  // Hỗ trợ trường hợp CONNECTING: đợi onopen rồi gửi để tránh "not connected"
+  const payload = {
     channelId: channelID,
     senderId: userID,
     content,
     messageType,
+    replyTo: replyTo || null,     // <- reply
+    attachments: attachments || []// <- attachments (mặc định [])
   };
-  console.log("[sendWebSocketMessage]Sending WebSocket message:", message);
-  ws.send(JSON.stringify(message));
-  return message;
+
+  const doSend = () => {
+    console.log("[sendWebSocketMessage]Sending WebSocket message:", payload);
+    ws.send(JSON.stringify(payload));
+  };
+
+  if (ws.readyState === WebSocket.OPEN) {
+    doSend();
+  } else if (ws.readyState === WebSocket.CONNECTING) {
+    console.log("[sendWebSocketMessage]WS CONNECTING → sẽ gửi sau khi open");
+    const onceOpen = () => {
+      ws.removeEventListener("open", onceOpen);
+      doSend();
+    };
+    ws.addEventListener("open", onceOpen);
+  } else {
+    console.error("[sendWebSocketMessage]WebSocket is not connected (state:", ws.readyState, ")");
+    throw new Error("WebSocket is not connected");
+  }
+
+  return payload;
 };
 
 // --- Message actions ---
@@ -573,5 +598,47 @@ export const uploadFile = async (file) => {
   } catch (error) {
     console.error("[uploadFile] Lỗi tải file:", error);
     throw new Error(error.response?.data?.error || "Không thể tải file lên.");
+  }
+};
+
+// Giống cấu trúc code 1 (uploadFile)
+export const editMessage = async (messageId, content) => {
+  if (!messageId || !content) throw new Error("Thiếu ID tin nhắn hoặc nội dung mới.");
+
+  try {
+    const res = await API.put(`/api/messages/${messageId}`, { content });
+    return res.data; // { updatedMessage } hoặc object trả về từ BE
+  } catch (error) {
+    console.error("[editMessage] Lỗi chỉnh sửa tin nhắn:", error);
+    throw new Error(error.response?.data?.error || "Không thể chỉnh sửa tin nhắn.");
+  }
+};
+
+export const toggleReaction = async (messageId, emoji) => {
+  if (!messageId || !emoji) throw new Error("Thiếu ID tin nhắn hoặc emoji.");
+
+  try {
+    const res = await API.post(`/api/messages/${messageId}/reaction`, { emoji });
+    return res.data; // { success: true, reactions: [...] }
+  } catch (error) {
+    console.error("[toggleReaction] Lỗi phản ứng emoji:", error);
+    throw new Error(error.response?.data?.error || "Không thể thực hiện phản ứng emoji.");
+  }
+};
+
+export const sendReplyMessage = async (
+  channelID,
+  content,
+  messageType = "Text",
+  replyTo = null,
+  attachments = []
+) => {
+  if (!channelID || !content) throw new Error("Thiếu dữ liệu để gửi tin nhắn trả lời.");
+
+  try {
+    return await sendWebSocketMessage(channelID, content, messageType, replyTo, attachments);
+  } catch (error) {
+    console.error("[sendReplyMessage] Lỗi gửi tin nhắn trả lời:", error);
+    throw new Error(error.response?.data?.error || "Không thể gửi tin nhắn trả lời.");
   }
 };

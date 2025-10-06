@@ -9,14 +9,16 @@ import {
   connectWebSocket,
   sendWebSocketMessage,
   getChannelMembers,
-  // 2 API dưới đây cần có trong services/api.js
   recallMessage,
   hideMessageForMe,
   uploadFile,
+  toggleReaction,
+  editMessage,
 } from "../../services/api";
 import { BsThreeDotsVertical } from "react-icons/bs";
 import ChannelMenu from "../Channel/ChannelMenu";
 import ChannelModal from "../Channel/ChannelModal";
+import { FiCornerUpLeft, FiEdit2 } from "react-icons/fi";
 
 const Column3 = ({ mode, selectedOption, currentChannel }) => {
   const [friends, setFriends] = useState([]);
@@ -33,12 +35,12 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [myRole, setMyRole] = useState("Member");
   const [modal, setModal] = useState({ type: null, data: null });
-  // --- ghi âm ---
+
+  // --- voice ---
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef(null);
   const [recordingStart, setRecordingStart] = useState(null);
   const [recordingMs, setRecordingMs] = useState(0);
-  // --- xem lại voice trước khi gửi ---
   const [recordedBlob, setRecordedBlob] = useState(null);
   const [recordedUrl, setRecordedUrl] = useState(null);
   const audioRef = useRef(null);
@@ -50,17 +52,19 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
   const analyserRef = useRef(null);
   const rafRef = useRef(null);
 
-  // ----- context menu -----
-  const [ctxMenu, setCtxMenu] = useState({
-    visible: false,
-    x: 0,
-    y: 0,
-    message: null,
-  });
+  // reactions + reply + edit
+  const [pickerVisible, setPickerVisible] = useState({ msgId: null, visible: false });
+  const [pickerPosition, setPickerPosition] = useState({ left: 0, top: 0, align: "left" });
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [editingMessage, setEditingMessage] = useState(null);
+
+  // context menu
+  const [ctxMenu, setCtxMenu] = useState({ visible: false, x: 0, y: 0, message: null });
 
   const me = sessionStorage.getItem("userID");
   const scrollBottomRef = useRef(null);
-  const listRef = useRef(null); // khung cuộn tin nhắn
+  const listRef = useRef(null);
+  const inputRef = useRef(null);
 
   const isImage = (f) => f && /^image\//i.test(f.type);
   const formatDuration = (ms) => {
@@ -90,19 +94,16 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
   // Đóng context menu khi click ngoài / ESC
   useEffect(() => {
     const onDocClick = () => setCtxMenu((s) => ({ ...s, visible: false, message: null }));
-    const onEsc = (e) => {
-      if (e.key === "Escape") onDocClick();
-    };
+    const onEsc = (e) => { if (e.key === "Escape") onDocClick(); };
     document.addEventListener("click", onDocClick);
     document.addEventListener("keydown", onEsc);
-    // KHÔNG add listener cho 'contextmenu' nữa, kẻo vừa mở đã bị đóng
     return () => {
       document.removeEventListener("click", onDocClick);
       document.removeEventListener("keydown", onEsc);
     };
   }, []);
 
-  // Điều hướng dữ liệu theo mode/option
+  // Điều hướng dữ liệu
   useEffect(() => {
     if (mode === "friends") {
       setLoading(true);
@@ -130,7 +131,41 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
       if (!incoming?.channelId) return;
       if (incoming.channelId !== currentId) return;
 
-      // Nếu là sự kiện recall
+      if (incoming.type === "message_reaction") {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === incoming.messageId
+              ? { ...m, reactions: incoming.reactions || [] }
+              : m
+          )
+        );
+        return;
+      }
+
+      // --- Message edited (UPDATE, không append) ---
+      if (incoming.type === "message_updated") {
+        console.log("[WS][EDITED]", incoming); // 👀 log BE gửi về
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === incoming.id
+              ? {
+                  ...m,
+                  content: incoming.content,
+                  edited: true,
+                  editedAt: incoming.editedAt || new Date().toISOString(),
+                  // giữ nguyên meta người gửi nếu BE không gửi; nhưng giờ BE đã gửi đủ:
+                  senderId: incoming.senderId || m.senderId,
+                  senderName: incoming.senderName ?? m.senderName,
+                  senderAvatar: incoming.senderAvatar ?? m.senderAvatar,
+                  messageType: incoming.messageType || m.messageType,
+                  timestamp: incoming.timestamp || m.timestamp,
+                }
+              : m
+          )
+        );
+        return; // ❗️ĐỪNG append
+      }
+
       if (incoming.type === "message_recalled") {
         setMessages((prev) =>
           prev.map((m) =>
@@ -139,10 +174,9 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
               : m
           )
         );
-        return; // dừng, không chuẩn hoá như message thường
+        return;
       }
 
-      // Nếu là tin nhắn thường
       const standardizedMessage = {
         id: incoming.id || Math.random().toString(36).substring(7),
         content: incoming.content ?? "",
@@ -156,8 +190,13 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
         url: incoming.url || null,
         fileId: incoming.fileId || null,
         channelId: incoming.channelId,
+        reactions: incoming.reactions || [],
+        // hỗ trợ cả dạng reply embed và reply id
+        reply: incoming.reply || null,
+        replyId: incoming.replyId || incoming.replyTo || null,
       };
 
+      console.log("[WS][PARSED]", standardizedMessage);
       setMessages((prev) => [...prev, standardizedMessage]);
     });
 
@@ -184,34 +223,81 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     }
   };
 
+  // Resolve reply (nếu BE chỉ trả replyId)
+  useEffect(() => {
+    if (!messages?.length) return;
+    const map = new Map(messages.map((m) => [m.id, m]));
+    const next = messages.map((m) => {
+      if (!m.reply && m.replyId && map.has(m.replyId)) {
+        return { ...m, reply: map.get(m.replyId) };
+      }
+      return m;
+    });
+    // chỉ set lại nếu có thay đổi để tránh re-render loop
+    const changed = next.some((m, i) => m !== messages[i]);
+    if (changed) setMessages(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length]);
+
   const handleSendMessage = async () => {
     if (!currentChannel || (!currentChannel.id && !currentChannel.channelID)) {
       setNewMessageError("Không thể gửi: kênh không hợp lệ.");
       return;
     }
 
+    // --- Edit: chỉ cho phép Text ---
+    if (editingMessage) {
+      const mt = String(editingMessage.messageType || "Text").toLowerCase();
+      if (mt !== "text") {
+        console.error("[Edit] Tried to edit non-text message:", editingMessage);
+        setNewMessageError("Chỉ có thể chỉnh sửa tin nhắn văn bản.");
+        setEditingMessage(null);
+        setNewMessage("");
+        return;
+      }
+      try {
+        const res = await editMessage(editingMessage.id, newMessage);
+        console.log("[EditMessage] Response:", res);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === editingMessage.id ? { ...m, content: newMessage } : m
+          )
+        );
+        setEditingMessage(null);
+        setNewMessage("");
+        setNewMessageError("");
+        return;
+      } catch (err) {
+        console.error("[Edit error]", err);
+        setNewMessageError("Không thể chỉnh sửa tin nhắn.");
+        return;
+      }
+    }
+
     try {
+      // Voice
       if (recordedBlob) {
         const voiceFile = new File([recordedBlob], `voice-${Date.now()}.webm`, { type: "audio/webm" });
         const uploaded = await uploadFile(voiceFile);
         await sendWebSocketMessage(
-          currentChannel.id || currentChannel.channelID, 
-          uploaded.url, 
-          "Voice"
+          currentChannel.id || currentChannel.channelID,
+          uploaded.url,
+          "Voice",
+          replyingTo?.id
         );
-        // reset voice preview
         discardRecorded();
         setNewMessageError("");
         return;
       }
 
-      // 1) Nếu đang có file đã chọn → upload & gửi File
+      // File
       if (selectedFile) {
         const uploaded = await uploadFile(selectedFile);
         await sendWebSocketMessage(
           currentChannel.id || currentChannel.channelID,
           uploaded.url,
-          "File"
+          "File",
+          replyingTo?.id
         );
         setSelectedFile(null);
         setPreviewUrl(null);
@@ -219,38 +305,35 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
         return;
       }
 
-      // 2) Nếu là text
+      // Text
       if (!newMessage.trim()) return;
       await sendWebSocketMessage(
         currentChannel.id || currentChannel.channelID,
         newMessage,
-        "Text"
+        "Text",
+        replyingTo?.id
       );
       setNewMessage("");
+      setReplyingTo(null);
       setNewMessageError("");
     } catch (err) {
+      console.error("[Send error]", err);
       setNewMessageError("Không thể gửi.");
     }
   };
 
-  // Khi chọn file
+  // File select
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    // ✅ Check 25MB (khớp BE MaxBytesReader 25MB)
     const MAX = 25 * 1024 * 1024; // 25MB
     if (file.size > MAX) {
       alert("Kích thước file vượt quá 25MB!");
-      // reset input để có thể chọn lại cùng file
       e.target.value = "";
       return;
     }
-
     setSelectedFile(file);
     setPreviewUrl(URL.createObjectURL(file));
-
-    // ✅ reset giá trị input để lần sau chọn lại cùng file vẫn trigger onChange
     e.target.value = "";
   };
 
@@ -270,12 +353,12 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     }
   };
 
+  // Voice record
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
 
-      // --- Tạo AudioContext và Analyser ---
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       await audioCtx.resume();
       const source = audioCtx.createMediaStreamSource(stream);
@@ -286,7 +369,6 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
       analyserRef.current = analyser;
       setAudioContext(audioCtx);
 
-      // --- Hàm vẽ waveform ---
       const drawVisualizer = () => {
         const canvas = canvasRef.current;
         const ctx = canvas?.getContext("2d");
@@ -294,17 +376,13 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
           rafRef.current = requestAnimationFrame(drawVisualizer);
           return;
         }
-
         const width = canvas.width;
         const height = canvas.height;
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
         analyser.getByteTimeDomainData(dataArray);
 
-        // nền tối
         ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
         ctx.fillRect(0, 0, width, height);
-
-        // đường giữa (nếu im lặng vẫn thấy)
         ctx.strokeStyle = "rgba(168,85,247,0.25)";
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -312,11 +390,9 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
         ctx.lineTo(width, height / 2);
         ctx.stroke();
 
-        // waveform
         ctx.strokeStyle = "#a855f7";
         ctx.lineWidth = 2;
         ctx.beginPath();
-
         const sliceWidth = width / dataArray.length;
         let x = 0;
         for (let i = 0; i < dataArray.length; i++) {
@@ -330,11 +406,8 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
 
         rafRef.current = requestAnimationFrame(drawVisualizer);
       };
-
-      // bắt đầu vẽ
       rafRef.current = requestAnimationFrame(drawVisualizer);
 
-      // --- Tạo MediaRecorder ---
       const mr = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
       mediaRecorderRef.current = mr;
 
@@ -345,18 +418,13 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
       setRecordedUrl(null);
       setIsRecording(true);
 
-      mr.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
-      };
-
+      mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
       mr.onstop = () => {
         try {
-          // dừng animation
           if (rafRef.current) {
             cancelAnimationFrame(rafRef.current);
             rafRef.current = null;
           }
-
           const blob = new Blob(chunksRef.current, { type: "audio/webm;codecs=opus" });
           if (blob.size > 0) {
             setRecordedBlob(blob);
@@ -378,7 +446,6 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     }
   };
 
-
   const stopRecording = () => {
     try {
       if (rafRef.current) {
@@ -396,25 +463,13 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     setRecordedBlob(null);
     setRecordedUrl(null);
     setIsPlaying(false);
-
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-
     if (audioContext) {
       audioContext.close();
       setAudioContext(null);
-    }
-  };
-
-  const togglePlayPreview = () => {
-    const a = audioRef.current;
-    if (!a) return;
-    if (a.paused) {
-      a.play();
-    } else {
-      a.pause();
     }
   };
 
@@ -437,7 +492,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
   // Helpers
   const isMine = (msg) => msg?.senderId?.toString() === me?.toString();
 
-  // Mở menu tại vị trí chuột phải (theo toạ độ của khung cuộn listRef)
+  // Context menu
   const openMessageMenu = (e, msg) => {
     e.preventDefault();
     e.stopPropagation();
@@ -451,7 +506,6 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
 
     const menuWidth = 190;
     const menuHeight = 80;
-
     if (x + menuWidth > host.scrollWidth) x = host.scrollWidth - menuWidth - 10;
     if (y + menuHeight > host.scrollHeight) y = host.scrollHeight - menuHeight - 10;
 
@@ -474,10 +528,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     }
   };
 
-  // Thời gian cho phép thu hồi tin nhắn (2 phút)
   const RECALL_WINDOW_MS = 2 * 60 * 1000;
-
-  // Kiểm tra tin nhắn có hết hạn thu hồi chưa
   const isRecallExpired = (msg) => {
     if (!msg?.timestamp) return true;
     const msgTime = new Date(msg.timestamp).getTime();
@@ -557,8 +608,8 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     if (!currentChannel?.channelID) return;
     try {
       const members = await getChannelMembers(currentChannel.channelID);
-      const me = sessionStorage.getItem("userID");
-      const myMember = members.find((m) => m.MemberID === me);
+      const meId = sessionStorage.getItem("userID");
+      const myMember = members.find((m) => m.MemberID === meId);
       setMyRole(myMember?.Role || "Member");
       setMenuOpen(true);
     } catch (err) {
@@ -586,6 +637,32 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
         break;
       default:
         alert("Chức năng chưa được hỗ trợ");
+    }
+  };
+
+  // Reaction picker
+  const openReactionPicker = (msgId, e) => {
+    e?.stopPropagation();
+    const host = listRef.current;
+    if (!host) return;
+
+    const hostRect = host.getBoundingClientRect();
+    const targetRect = e.currentTarget.getBoundingClientRect();
+    const left = targetRect.left - hostRect.left + host.scrollLeft;
+    const top = targetRect.top - hostRect.top + host.scrollTop;
+    const align = left > hostRect.width / 2 ? "right" : "left";
+
+    setPickerVisible({ msgId, visible: true });
+    setPickerPosition({ left, top, align });
+  };
+
+  const handleToggleReaction = async (messageId, emoji) => {
+    try {
+      await toggleReaction(messageId, emoji);
+    } catch (err) {
+      console.error("[handleToggleReaction] Lỗi:", err);
+    } finally {
+      setPickerVisible({ msgId: null, visible: false });
     }
   };
 
@@ -626,13 +703,14 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
         className="relative flex-1 overflow-y-auto space-y-2 p-2 rounded-lg bg-black/30 backdrop-blur-sm"
       >
         {messagesError && <p className="text-red-400 text-sm">{messagesError}</p>}
+
         {messages.length > 0 ? (
           messages.map((msg) => {
             const mine = isMine(msg);
             const isRecalled = !!msg.recalled;
             return (
               <div
-                key={msg.id || msg.timestamp}
+                key={msg.id}
                 className={`flex ${mine ? "justify-end" : "justify-start"}`}
                 onContextMenu={(e) => openMessageMenu(e, msg)}
               >
@@ -644,20 +722,74 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                       className="w-7 h-7 rounded-full border border-purple-500 object-cover shrink-0"
                     />
                   )}
+
                   <div
-                    className={`px-3 py-2 rounded-2xl text-sm text-white shadow transition select-text
+                    className={`relative group px-3 py-2 rounded-2xl text-sm text-white shadow transition select-text
                       ${
                         mine
                           ? "bg-gradient-to-r from-fuchsia-600 via-purple-600 to-blue-600 shadow-[0_0_12px_#a855f7]"
                           : "bg-purple-700/30 border border-purple-500/40"
                       } ${isRecalled ? "opacity-70" : ""}`}
                   >
-                    {!mine && !isRecalled && (
-                      <div className="text-xs text-purple-300 font-semibold mb-0.5">
-                        {msg.senderName || "Người gửi"}
+                    {/* Hover actions: đặt cạnh bong bóng, hướng vào trung tâm */}
+                    <div
+                      className={[
+                        "pointer-events-none",
+                        "absolute top-1/2 -translate-y-1/2",
+                        "flex gap-2 opacity-0 group-hover:opacity-100 transition z-10",
+                        mine ? "right-full mr-2" : "left-full ml-2",
+                      ].join(" ")}
+                    >
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setReplyingTo(msg); }}
+                        title="Trả lời tin nhắn"
+                        className="pointer-events-auto w-8 h-8 rounded-full border border-white/20 bg-black/60 backdrop-blur-sm shadow-lg hover:scale-110 hover:bg-white/20 transition flex items-center justify-center"
+                      >
+                        <FiCornerUpLeft className="w-4 h-4 text-white" />
+                      </button>
+
+                      {mine && !msg.recalled && msg.messageType === "Text" && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setNewMessage(msg.content);
+                            setReplyingTo(null);
+                            setEditingMessage(msg);
+                            setTimeout(() => inputRef.current?.focus(), 0);
+                          }}
+                          title="Chỉnh sửa tin nhắn"
+                          className="pointer-events-auto w-8 h-8 rounded-full border border-white/20 bg-black/60 backdrop-blur-sm shadow-lg hover:scale-110 hover:bg-white/20 transition flex items-center justify-center"
+                        >
+                          <FiEdit2 className="w-4 h-4 text-white" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Nếu tin nhắn này là reply → trích dẫn mờ giống Messenger/Zalo */}
+                    {(msg.reply || msg.replyId) && (
+                      <div className="mb-1 p-2 rounded-lg bg-white/5 border border-white/10 backdrop-blur-sm">
+                        <div className="text-[11px] text-purple-300 mb-1 flex items-center gap-1">
+                          <span className="opacity-80">↪</span>
+                          <span>Trả lời</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <div className="w-1 rounded bg-purple-500/60 mt-0.5" />
+                          <div className="text-xs text-gray-200/90 max-w-[34ch] line-clamp-2">
+                            {(msg.reply || msg.replyId).recalled ? (
+                              <span className="italic text-gray-400">Tin nhắn đã bị thu hồi</span>
+                            ) : (msg.reply || msg.replyId).messageType === "Voice" ? (
+                              <span>🎤 Voice message</span>
+                            ) : (msg.reply || msg.replyId).messageType === "File" ? (
+                              <span>📎 Tệp đính kèm</span>
+                            ) : (
+                              <span>{(msg.reply || msg.replyId).content}</span>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     )}
-                    {/* nội dung tin nhắn */}
+
+                    {/* Nội dung tin nhắn */}
                     {isRecalled ? (
                       <div className="italic text-gray-400">Tin nhắn đã được thu hồi</div>
                     ) : msg.messageType === "Voice" && msg.url ? (
@@ -703,9 +835,67 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                     ) : (
                       <div className="break-words text-white">{msg.content}</div>
                     )}
+
                     <div className="text-[10px] text-gray-300 mt-1 text-right">
                       {new Date(msg.timestamp).toLocaleTimeString()}
                     </div>
+
+                    {/* Reactions */}
+                    <div className="flex gap-1 mt-1 flex-wrap items-center">
+                      {Array.isArray(msg.reactions) && msg.reactions.length > 0 &&
+                        msg.reactions.map((r, idx) => {
+                          const userIDs = r.userIDs || [];
+                          const mineReact = userIDs.includes(me);
+                          const count = userIDs.length;
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => handleToggleReaction(msg.id, r.emoji)}
+                              title={count > 0 ? `Đã thả bởi ${count} người dùng` : "Không có ai thả"}
+                              className={`px-2 py-1 text-sm rounded-full border transition-transform duration-150 flex items-center gap-1 ${
+                                mineReact
+                                  ? "bg-purple-600 text-white border-purple-400 scale-105"
+                                  : "bg-transparent text-purple-300 border-purple-400/40 hover:scale-110"
+                              } hover:bg-purple-500/30`}
+                            >
+                              <span>{r.emoji}</span>
+                              {count > 1 && <span className="text-xs">{count}</span>}
+                            </button>
+                          );
+                        })}
+                      <button
+                        onClick={(e) => openReactionPicker(msg.id, e)}
+                        className="text-xs text-gray-400 hover:text-white ml-1"
+                        title="Thả cảm xúc khác"
+                      >
+                        ➕
+                      </button>
+                    </div>
+
+                    {/* Emoji mini picker */}
+                    {pickerVisible.visible && pickerVisible.msgId === msg.id && (
+                      <div
+                        className={`absolute z-50 bg-[#1a1426] border border-purple-700 rounded-xl p-2 shadow-xl text-2xl flex gap-1 ${
+                          pickerPosition.align === "right" ? "right-0" : "left-0"
+                        }`}
+                      >
+                        {["😀", "😂", "❤️", "👍", "🔥", "😢", "😮", "😡"].map((e) => (
+                          <button
+                            key={e}
+                            onClick={() => handleToggleReaction(pickerVisible.msgId, e)}
+                            className="p-1 hover:scale-125 transition-transform"
+                          >
+                            {e}
+                          </button>
+                        ))}
+                        <button
+                          onClick={() => setPickerVisible({ msgId: null, visible: false })}
+                          className="ml-2 text-sm text-gray-400 hover:text-white"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -715,7 +905,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
           <p className="text-gray-400 italic">Chưa có tin nhắn</p>
         )}
 
-        {/* Context menu tin nhắn */}
+        {/* Context menu */}
         {ctxMenu.visible && ctxMenu.message && (
           <div
             className="absolute z-50 min-w-[190px] rounded-lg border border-purple-600/40 bg-[#1a1426] shadow-xl p-1"
@@ -727,8 +917,8 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                 ${
                   isMine(ctxMenu.message)
                     ? isRecallExpired(ctxMenu.message)
-                      ? "text-gray-400 cursor-not-allowed opacity-60" // hết hạn → xám + khóa
-                      : "text-red-400 font-semibold" // còn hạn → đỏ đậm để nhấn mạnh
+                      ? "text-gray-400 cursor-not-allowed opacity-60"
+                      : "text-red-400 font-semibold"
                     : "text-gray-400 cursor-not-allowed"
                 }
                 ${ctxMenu.message.recalled ? "opacity-60 cursor-not-allowed" : ""}`}
@@ -745,9 +935,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                 isRecallExpired(ctxMenu.message)
               }
             >
-              {isRecallExpired(ctxMenu.message)
-                ? "Thu hồi (hết hạn)"
-                : "Thu hồi tin nhắn"}
+              {isRecallExpired(ctxMenu.message) ? "Thu hồi (hết hạn)" : "Thu hồi tin nhắn"}
             </button>
 
             <button
@@ -758,16 +946,63 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
             </button>
           </div>
         )}
-
         <div ref={scrollBottomRef} />
       </div>
 
       {/* Input */}
       <div className="mt-3 w-full">
-        {newMessageError && (
-          <p className="text-red-400 text-sm mb-2">{newMessageError}</p>
+        {/* Khung preview trả lời */}
+        {replyingTo && (
+          <div className="mb-2 p-2 bg-purple-900/40 border border-purple-500/50 rounded-lg">
+            <div className="text-xs text-purple-300 mb-1">Đang trả lời:</div>
+            <div className="p-2 rounded-md bg-white/5 border border-white/10">
+              <div className="flex gap-2">
+                <div className="w-1 bg-purple-500/60 rounded" />
+                <div className="text-xs text-gray-200/90 max-w-[80ch]">
+                  {replyingTo.recalled ? (
+                    <span className="italic text-gray-400">Tin nhắn đã bị thu hồi</span>
+                  ) : replyingTo.messageType === "Voice" ? (
+                    <span>🎤 Voice message</span>
+                  ) : replyingTo.messageType === "File" ? (
+                    <span>📎 Tệp đính kèm</span>
+                  ) : (
+                    <span>{replyingTo.content}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end mt-1">
+              <button
+                onClick={() => setReplyingTo(null)}
+                className="text-gray-400 hover:text-white text-sm"
+                title="Hủy trả lời"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
         )}
 
+        {/* Khung “Đang chỉnh sửa” */}
+        {editingMessage && (
+          <div className="mb-2 p-2 bg-blue-900/40 border border-blue-500/50 rounded-lg flex justify-between items-center">
+            <div className="flex flex-col text-sm text-gray-200">
+              <span className="text-xs text-blue-300">Đang chỉnh sửa:</span>
+              <span className="line-clamp-1">{editingMessage.content}</span>
+            </div>
+            <button
+              onClick={() => setEditingMessage(null)}
+              className="text-gray-400 hover:text-white text-sm"
+              title="Hủy chỉnh sửa"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        {newMessageError && <p className="text-red-400 text-sm mb-2">{newMessageError}</p>}
+
+        {/* Preview ảnh */}
         {selectedFile && isImage(selectedFile) && previewUrl && (
           <div className="mb-2">
             <div className="bg-black/40 border border-purple-600/40 rounded-xl p-2">
@@ -790,7 +1025,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
           </div>
         )}
 
-        {/* === VOICE MODE === */}
+        {/* VOICE MODE */}
         {(isRecording || recordedBlob) ? (
           <div className="w-full rounded-xl border border-purple-500 bg-white/10 p-3 flex flex-col gap-2">
             <div className="flex items-center gap-2">
@@ -805,7 +1040,6 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
               <div className={`px-2 py-1 rounded-lg text-xs ${
                 isRecording ? "bg-red-500/20 text-red-200" : "bg-purple-500/20 text-purple-200"
               }`}>
-                
                 {isRecording ? "Đang ghi" : "Xem lại"} • {formatDuration(recordingMs)}
               </div>
 
@@ -822,12 +1056,12 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
               {recordedUrl && !isRecording && (
                 <>
                   <audio ref={audioRef} preload="metadata" controls className="hidden" />
-                  {/* hoặc hiển thị controls nếu bạn muốn */}
-                  <audio preload="metadata" className="hidden">
-                    <source src={recordedUrl} type="audio/webm;codecs=opus" />
-                  </audio>
                   <button
-                    onClick={togglePlayPreview}
+                    onClick={() => {
+                      const a = audioRef.current;
+                      if (!a) return;
+                      a.paused ? a.play() : a.pause();
+                    }}
                     className="px-3 py-2 rounded-lg border border-purple-400 text-purple-200 hover:text-white"
                     title={isPlaying ? "Tạm dừng" : "Phát lại"}
                   >
@@ -854,9 +1088,10 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
             </div>
           </div>
         ) : (
-          /* === TEXT/FILE MODE ===  — chỉ 1 lớp, full width */
+          // TEXT/FILE MODE
           <div className="w-full flex items-center gap-2 rounded-xl bg-white/10 border border-purple-500 px-3 py-2">
             <input
+              ref={inputRef}
               type="text"
               placeholder="Nhập tin nhắn..."
               value={newMessage}
