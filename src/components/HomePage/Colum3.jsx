@@ -14,6 +14,7 @@ import {
   uploadFile,
   toggleReaction,
   editMessage,
+  sendTypingEvent,
 } from "../../services/api";
 import { BsThreeDotsVertical } from "react-icons/bs";
 import ChannelMenu from "../Channel/ChannelMenu";
@@ -60,6 +61,10 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
 
   // context menu
   const [ctxMenu, setCtxMenu] = useState({ visible: false, x: 0, y: 0, message: null });
+
+  const [typingUsers, setTypingUsers] = useState([]); // array of { id, name? }
+  const typingTimeoutRef = useRef(null);
+  const isTypingRef = useRef(false);
 
   const me = sessionStorage.getItem("userID");
   const scrollBottomRef = useRef(null);
@@ -174,6 +179,27 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
               : m
           )
         );
+        return;
+      }
+
+      if (incoming.type === "typing") {
+        // Nếu là event typing
+        const senderId = incoming.senderId;
+        const senderName = incoming.senderName || null;
+        const isTyping = !!incoming.isTyping;
+
+        if (senderId === me) return;
+
+        setTypingUsers(prev => {
+          // remove existing same sender
+          const filtered = prev.filter(u => u.id !== senderId);
+          if (isTyping) {
+            // thêm lại (đặt ở cuối)
+            return [...filtered, { id: senderId, name: senderName }];
+          } else {
+            return filtered;
+          }
+        });
         return;
       }
 
@@ -666,6 +692,33 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     }
   };
 
+  const handleInputChange = (e) => {
+    const text = e.target.value;
+    setNewMessage(text);
+
+    // gửi typing = true khi bắt đầu gõ
+    if (!isTypingRef.current) {
+      try {
+        sendTypingEvent(currentChannel.id || currentChannel.channelID, true);
+      } catch (err) {
+        // ignore
+      }
+      isTypingRef.current = true;
+    }
+
+    // reset timeout: nếu không có activity trong 1200ms => gửi typing = false
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      try {
+        sendTypingEvent(currentChannel.id || currentChannel.channelID, false);
+      } catch (err) {
+        // ignore
+      }
+      isTypingRef.current = false;
+      typingTimeoutRef.current = null;
+    }, 1200);
+  };
+
   // UI
   const renderChatWindow = () => (
     <div className="flex h-full flex-col rounded-xl p-4 bg-gradient-to-br from-black via-purple-900 to-black shadow-[0_0_20px_#a855f7]">
@@ -1090,12 +1143,19 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
         ) : (
           // TEXT/FILE MODE
           <div className="w-full flex items-center gap-2 rounded-xl bg-white/10 border border-purple-500 px-3 py-2">
+            {typingUsers.length > 0 && (
+              <div className="text-sm text-gray-300 italic mb-1">
+                {typingUsers.length === 1
+                  ? `${typingUsers[0].name || "Đối phương"} đang nhập...`
+                  : `${typingUsers.length} người đang nhập...`}
+              </div>
+            )}
             <input
               ref={inputRef}
               type="text"
               placeholder="Nhập tin nhắn..."
               value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
+              onChange={handleInputChange}
               onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
               onPaste={handlePaste}
               className="flex-1 bg-transparent text-white placeholder-gray-400 focus:outline-none"

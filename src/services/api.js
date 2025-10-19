@@ -1,7 +1,7 @@
 import axios from "axios";
 import { jwtDecode } from "jwt-decode";
 
-const API_BASE = process.env.REACT_APP_BACKEND_URL || "http://localhost:8080";
+const API_BASE = process.env.REACT_APP_BACKEND_URL || "http://localhost:8080" || "https://webchatserver-japo.onrender.com";
 
 // Khởi tạo Axios với cấu hình cơ bản
 const API = axios.create({
@@ -640,5 +640,41 @@ export const sendReplyMessage = async (
   } catch (error) {
     console.error("[sendReplyMessage] Lỗi gửi tin nhắn trả lời:", error);
     throw new Error(error.response?.data?.error || "Không thể gửi tin nhắn trả lời.");
+  }
+};
+
+export const sendTypingEvent = (channelID, isTyping) => {
+  if (!channelID) throw new Error("Thiếu channelID cho typing event");
+  const token = sessionStorage.getItem("token");
+  if (!token) return; // không có token -> không gửi
+
+  let userID;
+  try {
+    const decoded = jwtDecode(token);
+    userID = decoded.user_id || decoded.sub;
+    if (!userID) return;
+  } catch (error) {
+    console.error("[sendTypingEvent] Invalid token:", error);
+    return;
+  }
+
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    // nếu ws chưa mở thì bỏ qua (hoặc có thể queue sau)
+    return;
+  }
+
+  const senderName = sessionStorage.getItem("userName") || undefined; // optional
+  const payload = {
+    type: "typing",
+    channelId: channelID,
+    senderId: userID,
+    isTyping,
+  };
+  if (senderName) payload.senderName = senderName;
+
+  try {
+    ws.send(JSON.stringify(payload));
+  } catch (err) {
+    console.error("[sendTypingEvent] send error:", err);
   }
 };
