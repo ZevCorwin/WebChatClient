@@ -5,7 +5,7 @@ const API_BASE = process.env.REACT_APP_BACKEND_URL || "http://localhost:8080" ||
 
 // Khởi tạo Axios với cấu hình cơ bản
 const API = axios.create({
-  baseURL: process.env.REACT_APP_BACKEND_URL, // URL cơ sở từ file .env
+  baseURL: API_BASE, // URL cơ sở từ file .env
   headers: {
     "Content-Type": "application/json",
   },
@@ -22,59 +22,185 @@ API.interceptors.request.use((config) => {
 
 // WebSocket instance
 let ws = null;
+let wsConnecting = false;
+let wsReconnectTimer = null;
+let wsBackoffMs = 800;         // backoff khởi điểm
+const WS_BACKOFF_MAX = 10_000; // giới hạn backoff
+let wsHeartbeatTimer = null;
+let wsLastPongAt = 0;
+let wsOnMessageCb = null;
+
+const inFlightSends = new Map();
+
+// 👇👇 Thêm hai helper gửi trạng thái
+export const wsSendDelivered = (messageId, channelId, userId) => {
+  try {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      type: "message_delivered",
+      messageId,
+      channelId,
+      userId,
+    }));
+  } catch (e) { /* ignore */ }
+};
+
+export const wsSendRead = (messageId, channelId, userId) => {
+  try {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      type: "message_read",
+      messageId,
+      channelId,
+      userId,
+    }));
+  } catch (e) { /* ignore */ }
+};
+
+function clearTimers() {
+  if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+  if (wsHeartbeatTimer) { clearInterval(wsHeartbeatTimer); wsHeartbeatTimer = null; }
+}
+
+function makeWsUrl(token) {
+  const backend = process.env.REACT_APP_BACKEND_URL || "http://localhost:8080";
+  const u = new URL(backend);
+  const wsProto = u.protocol === "https:" ? "wss:" : "ws:";
+  return `${wsProto}//${u.host}/ws/messages?token=${encodeURIComponent(token)}`;
+}
 
 export const connectWebSocket = (onMessageReceived) => {
   const token = sessionStorage.getItem("token");
   if (!token) {
-    console.error("[connectWebSocket]No token found in localStorage");
-    throw new Error("No token");
+    console.error("[connectWebSocket] No token");
+    return null;
   }
-  let userID;
-  try {
-    const decoded = jwtDecode(token);
-    userID = decoded.user_id || decoded.sub;
-    if (!userID) throw new Error("No userID in token");
-  } catch (error) {
-    console.error("[connectWebSocket]Invalid token:", error);
-    throw new Error("Invalid token");
-  }
-  console.log("[connectWebSocket]Connecting WebSocket with userID:", userID);
+  wsOnMessageCb = onMessageReceived;
 
-  ws = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("http", "ws")}/ws/messages?token=${encodeURIComponent(token)}`);
+  // nếu đã OPEN thì trả luôn
+  if (ws && ws.readyState === WebSocket.OPEN) return ws;
+  // nếu đang CONNECTING thì trả lại ws (đỡ tạo thêm)
+  if (ws && ws.readyState === WebSocket.CONNECTING) return ws;
+  if (wsConnecting) return ws;
+
+  const url = makeWsUrl(token);
+  wsConnecting = true;
+  clearTimers();
+
+  try {
+    ws = new WebSocket(url);
+  } catch (e) {
+    console.error("[connectWebSocket] new WebSocket error:", e);
+    scheduleReconnect(); // thử lại
+    wsConnecting = false;
+    return null;
+  }
 
   ws.onopen = () => {
-    console.log("[connectWebSocket]Connected to /ws/messages");
+    console.log("[WS] open");
+    wsConnecting = false;
+    // reset backoff sau khi nối lại thành công
+    wsBackoffMs = 800;
+
+    // heartbeat (ping mỗi 15s)
+    wsLastPongAt = Date.now();
+    clearTimers();
+    wsHeartbeatTimer = setInterval(() => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      try {
+        ws.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+      } catch {}
+      // nếu > 35s không thấy pong → đóng để kích hoạt reconnect
+      if (Date.now() - wsLastPongAt > 35_000) {
+        console.warn("[WS] heartbeat timeout -> close to reconnect");
+        try { ws.close(); } catch {}
+      }
+    }, 15_000);
   };
+
   ws.onmessage = (event) => {
-    console.log("[connectWebSocket]WebSocket message received:", event.data);
+    let rawText = "";
     try {
-      const message = JSON.parse(event.data);
-      console.log("[WS][PARSED]", {
-      id: message.id,
-      channelId: message.channelId,
-      senderId: message.senderId,
-      senderName: message.senderName,
-      senderAvatar: message.senderAvatar,
-      messageType: message.messageType,
-      timestamp: message.timestamp,
-    });
-      onMessageReceived(message);
-    } catch (error) {
-      console.error("[WS] Error parsing message:", error);
+      rawText = typeof event.data === "string" ? event.data : JSON.stringify(event.data);
+      const msg = JSON.parse(rawText);
+
+      // nếu server có trả pong
+      if (msg && msg.type === "pong") {
+        wsLastPongAt = Date.now();
+        return;
+      }
+
+      // **đồng bộ kiểu statusStage**: số -> số, chuỗi “Đã xem/…” -> map sang số
+      if (msg && msg.type === "message_status_update") {
+        if (typeof msg.statusStage !== "number") {
+          const map = { "Đang gửi":0, "Đã gửi":1, "Đã nhận":2, "Đã xem":3 };
+          msg.statusStage = typeof msg.statusStage === "string" && map[msg.statusStage] != null
+            ? map[msg.statusStage]
+            : (map[msg.status] ?? undefined);
+        }
+      }
+
+      // đẩy ra UI
+      wsOnMessageCb && wsOnMessageCb(msg);
+    } catch (e) {
+      // nếu server gửi nhiều frame / text có \u0003… vẫn log an toàn, không crash
+      console.warn("[WS] parse fail, raw:", rawText.slice(0, 300));
     }
   };
-  ws.onerror = (error) => {
-    console.error("[connectWebSocket]WebSocket error:", error);
+
+  ws.onerror = (e) => {
+    console.warn("[WS] error", e);
   };
-  ws.onclose = () => {
-    console.log("[connectWebSocket]WebSocket connection closed");
+
+  ws.onclose = (ev) => {
+    console.log("[WS] close", ev.code, ev.reason || "");
+    wsConnecting = false;
+    clearTimers();
+    // tự reconnect nếu không phải do mình logout
+    scheduleReconnect();
   };
+
+  // tự reconnect khi tab regain mạng
+  window.addEventListener("online", tryInstantReconnect, { once: true });
 
   return ws;
 };
 
+function scheduleReconnect() {
+  if (wsReconnectTimer) return;
+  // tăng backoff + jitter nhẹ
+  const delay = Math.min(wsBackoffMs, WS_BACKOFF_MAX) + Math.floor(Math.random() * 300);
+  console.log(`[WS] reconnect in ${delay}ms`);
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    wsBackoffMs = Math.min(wsBackoffMs * 2, WS_BACKOFF_MAX);
+    connectWebSocket(wsOnMessageCb);
+  }, delay);
+}
+function tryInstantReconnect() {
+  // khi mạng lên lại: thử ngay lập tức, và reset backoff nhỏ
+  wsBackoffMs = 800;
+  clearTimers();
+  connectWebSocket(wsOnMessageCb);
+}
+
+const payloadPreviewKey = (payload) => {
+  try {
+    return `${payload.clientId || ""}|${payload.channelId || ""}|${(payload.content || "").slice(0,200)}`;
+  } catch {
+    return Math.random().toString(36).slice(2,9);
+  }
+};
+
 // Cho phép gửi kèm replyTo + attachments (nếu có)
-export const sendWebSocketMessage = (channelID, content, messageType = "Text", replyTo = null, attachments = []) => {
+export const sendWebSocketMessage = async (
+  channelID,
+  content,
+  messageType = "Text",
+  replyTo = null,
+  attachments = [],
+  clientId = null
+) => {
   const token = sessionStorage.getItem("token");
   if (!token) throw new Error("No token");
 
@@ -82,47 +208,84 @@ export const sendWebSocketMessage = (channelID, content, messageType = "Text", r
   try {
     const decoded = jwtDecode(token);
     userID = decoded.user_id || decoded.sub;
-    if (!userID) throw new Error("No userID in token");
-  } catch (error) {
-    console.error("[sendWebSocketMessage]Invalid token:", error);
-    throw new Error("Invalid token");
+  } catch (err) {
+    console.error("[sendWebSocketMessage] invalid token:", err);
+    throw err;
   }
 
   if (!ws) {
-    console.error("[sendWebSocketMessage]WebSocket is not initialized");
-    throw new Error("WebSocket is not initialized");
+    console.error("[sendWebSocketMessage] ws not initialized");
+    throw new Error("WebSocket not initialized");
   }
 
-  // Hỗ trợ trường hợp CONNECTING: đợi onopen rồi gửi để tránh "not connected"
   const payload = {
+    type: "message",
     channelId: channelID,
     senderId: userID,
     content,
     messageType,
-    replyTo: replyTo || null,     // <- reply
-    attachments: attachments || []// <- attachments (mặc định [])
+    replyTo: replyTo || null,
+    attachments: attachments || [],
   };
+  if (clientId) payload.clientId = clientId;
 
-  const doSend = () => {
-    console.log("[sendWebSocketMessage]Sending WebSocket message:", payload);
-    ws.send(JSON.stringify(payload));
-  };
+  const key = clientId || payloadPreviewKey(payload);
 
-  if (ws.readyState === WebSocket.OPEN) {
-    doSend();
-  } else if (ws.readyState === WebSocket.CONNECTING) {
-    console.log("[sendWebSocketMessage]WS CONNECTING → sẽ gửi sau khi open");
-    const onceOpen = () => {
-      ws.removeEventListener("open", onceOpen);
-      doSend();
-    };
-    ws.addEventListener("open", onceOpen);
-  } else {
-    console.error("[sendWebSocketMessage]WebSocket is not connected (state:", ws.readyState, ")");
-    throw new Error("WebSocket is not connected");
+  // avoid duplicate sends for same key
+  if (inFlightSends.has(key)) {
+    console.warn("[WS-OUT] Duplicate send prevented for key:", key);
+    return key;
   }
 
-  return payload;
+  const sendPromise = new Promise((resolve, reject) => {
+    const doSend = () => {
+      try {
+        console.log("[WS-OUT] Sending", new Date().toISOString(), { key, channelId: payload.channelId, clientId: payload.clientId, snippet: (payload.content || "").slice(0,200) });
+        ws.send(JSON.stringify(payload));
+        resolve(key);
+      } catch (err) {
+        console.error("[WS-OUT] send error", err, { key, payload });
+        reject(err);
+      } finally {
+        // keep key in-flight briefly to avoid immediate duplicates from UI
+        setTimeout(() => inFlightSends.delete(key), 2000);
+      }
+    };
+
+    if (ws.readyState === WebSocket.OPEN) {
+      doSend();
+    } else if (ws.readyState === WebSocket.CONNECTING) {
+      // Wait for open once, avoid stacking listeners
+      const onOpen = () => {
+        try {
+          ws.removeEventListener("open", onOpen);
+          ws.removeEventListener("error", onErr);
+          doSend();
+        } catch (e) {
+          reject(e);
+        }
+      };
+      const onErr = (e) => {
+        ws.removeEventListener("open", onOpen);
+        ws.removeEventListener("error", onErr);
+        reject(e || new Error("WebSocket error during connect"));
+      };
+      ws.addEventListener("open", onOpen);
+      ws.addEventListener("error", onErr);
+      // safety timeout
+      setTimeout(() => {
+        ws.removeEventListener("open", onOpen);
+        ws.removeEventListener("error", onErr);
+        reject(new Error("WebSocket open timeout"));
+      }, 6000);
+    } else {
+      reject(new Error("WebSocket not open"));
+    }
+  });
+
+  // mark as in-flight
+  inFlightSends.set(key, { payload, startedAt: Date.now() });
+  return sendPromise;
 };
 
 // --- Message actions ---

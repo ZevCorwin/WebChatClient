@@ -15,6 +15,8 @@ import {
   toggleReaction,
   editMessage,
   sendTypingEvent,
+  wsSendDelivered,
+  wsSendRead,
 } from "../../services/api";
 import { BsThreeDotsVertical } from "react-icons/bs";
 import ChannelMenu from "../Channel/ChannelMenu";
@@ -66,10 +68,12 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
   const typingTimeoutRef = useRef(null);
   const isTypingRef = useRef(false);
 
-  const me = sessionStorage.getItem("userID");
+  const meRef = React.useRef(sessionStorage.getItem("userID"));
   const scrollBottomRef = useRef(null);
   const listRef = useRef(null);
   const inputRef = useRef(null);
+  const deliveredSentRef = useRef(new Set());
+  const readSentRef = useRef(new Set());
 
   const isImage = (f) => f && /^image\//i.test(f.type);
   const formatDuration = (ms) => {
@@ -77,6 +81,35 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     const m = String(Math.floor(sec / 60)).padStart(2, "0");
     const s = String(sec % 60).padStart(2, "0");
     return `${m}:${s}`;
+  };
+
+  const stageOf = (s, fallback = 0) => {
+    // nếu BE đã trả statusStage thì ưu tiên số
+    if (typeof s === "number") return s;
+    const rank = { "Đang gửi":0, "Đã gửi":1, "Đã nhận":2, "Đã xem":3 };
+    return rank[s] ?? fallback;
+  };
+
+  const markDeliveredOnce = (m, channelId, me) => {
+    if (m.senderId === me) return;
+    const curStage = stageOf(m.statusStage ?? m.status, 0);
+    if (curStage >= 2) return; // đã ≥ Đã nhận thì khỏi gửi
+    if (deliveredSentRef.current.has(m.id)) return;
+    try {
+      wsSendDelivered(m.id, channelId, me);
+      deliveredSentRef.current.add(m.id);
+    } catch {}
+  };
+
+  const markReadOnce = (m, channelId, me) => {
+    if (m.senderId === me) return;
+    const curStage = stageOf(m.statusStage ?? m.status, 0);
+    if (curStage >= 3) return; // đã ≥ Đã xem thì khỏi gửi
+    if (readSentRef.current.has(m.id)) return;
+    try {
+      wsSendRead(m.id, channelId, me);
+      readSentRef.current.add(m.id);
+    } catch {}
   };
 
   useEffect(() => {
@@ -127,6 +160,11 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, selectedOption, currentChannel]);
 
+  useEffect(() => {
+    deliveredSentRef.current.clear();
+    readSentRef.current.clear();
+  }, [currentChannel?.id, currentChannel?.channelID]);
+
   // WebSocket realtime
   useEffect(() => {
     if (!currentChannel) return;
@@ -135,6 +173,34 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     const ws = connectWebSocket((incoming) => {
       if (!incoming?.channelId) return;
       if (incoming.channelId !== currentId) return;
+
+      const stageLabel = ["Đang gửi","Đã gửi","Đã nhận","Đã xem"];
+
+      if (incoming.type === "message_status_update") {
+        setMessages(prev => prev.map(m => {
+          if (m.id !== incoming.messageId) return m;
+
+          const cur = Number(m.statusStage ?? -1);
+          const next = Number(incoming.statusStage ?? -1);
+
+          if (next > cur) {
+            return {
+              ...m,
+              statusStage: next,
+              status: stageLabel[next] ?? incoming.status ?? m.status,
+            };
+          }
+          // nếu BE cũ không có statusStage → fallback chuỗi như bạn đang làm
+          if (next === -1 && incoming.status) {
+            const rank = { "Đang gửi":0, "Đã gửi":1, "Đã nhận":2, "Đã xem":3 };
+            const curS = rank[m.status] ?? 0;
+            const nextS = rank[incoming.status] ?? 0;
+            return nextS > curS ? { ...m, status: incoming.status, statusStage: nextS } : m;
+          }
+          return m;
+        }));
+        return;
+      }
 
       if (incoming.type === "message_reaction") {
         setMessages((prev) =>
@@ -158,7 +224,6 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                   content: incoming.content,
                   edited: true,
                   editedAt: incoming.editedAt || new Date().toISOString(),
-                  // giữ nguyên meta người gửi nếu BE không gửi; nhưng giờ BE đã gửi đủ:
                   senderId: incoming.senderId || m.senderId,
                   senderName: incoming.senderName ?? m.senderName,
                   senderAvatar: incoming.senderAvatar ?? m.senderAvatar,
@@ -188,7 +253,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
         const senderName = incoming.senderName || null;
         const isTyping = !!incoming.isTyping;
 
-        if (senderId === me) return;
+        if (senderId === meRef.current) return;
 
         setTypingUsers(prev => {
           // remove existing same sender
@@ -211,7 +276,10 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
         senderId: incoming.senderId || "Unknown",
         senderName: incoming.senderName || "Người gửi",
         senderAvatar: incoming.senderAvatar || "/default-avatar.png",
-        status: incoming.status || "sent",
+        status: incoming.status || "Đang gửi",
+        statusStage: typeof incoming.statusStage === "number"
+                ? incoming.statusStage
+                : ({"Đang gửi":0,"Đã gửi":1,"Đã nhận":2,"Đã xem":3}[incoming.status] ?? 0),
         recalled: !!incoming.recalled,
         url: incoming.url || null,
         fileId: incoming.fileId || null,
@@ -224,7 +292,15 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
 
       console.log("[WS][PARSED]", standardizedMessage);
       setMessages((prev) => [...prev, standardizedMessage]);
-    });
+      
+      const me = meRef.current;
+        if (standardizedMessage.senderId && standardizedMessage.senderId !== me) {
+          const chId = standardizedMessage.channelId;
+          markDeliveredOnce(standardizedMessage, chId, me);
+          // tuỳ UX: nếu muốn auto "Đã xem", chỉ đọc 1 lần
+          setTimeout(() => markReadOnce(standardizedMessage, chId, me), 300);
+        }
+      });
 
     return () => ws.close();
   }, [currentChannel]);
@@ -241,8 +317,22 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
         : Array.isArray(response)
         ? response
         : [];
-      setMessages(list);
-      setMessagesError("");
+      const norm = list.map(m => ({
+        ...m,
+        id: m.id || m._id || m.ID,                  // 👈 đảm bảo luôn có id
+        senderId: m.senderId || m.SenderID || m.senderID
+      }));
+      setMessages(norm);
+      try {
+        const me = sessionStorage.getItem("userID");
+        const chId = channelID; // chính là param truyền vào
+
+        // Gửi "ĐÃ NHẬN" và (tuỳ UX) "ĐÃ XEM" dựa trên dữ liệu đã chuẩn hoá
+        norm.forEach(m => markDeliveredOnce(m, chId, me));
+        // 👉 nếu không muốn auto-đánh dấu đã xem lịch sử, comment dòng dưới
+        norm.forEach(m => markReadOnce(m, chId, me));
+        } catch {}
+        setMessagesError("");
     } catch (err) {
       setMessages([]);
       setMessagesError("Không thể tải tin nhắn: " + (err?.message || "Unknown error"));
@@ -516,7 +606,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
   }, [recordedUrl]);
 
   // Helpers
-  const isMine = (msg) => msg?.senderId?.toString() === me?.toString();
+  const isMine = (msg) => msg?.senderId?.toString() === meRef.current?.toString();
 
   // Context menu
   const openMessageMenu = (e, msg) => {
@@ -889,8 +979,16 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                       <div className="break-words text-white">{msg.content}</div>
                     )}
 
-                    <div className="text-[10px] text-gray-300 mt-1 text-right">
+                    <div className="text-[10px] text-gray-300 mt-1 text-right flex items-center gap-1">
                       {new Date(msg.timestamp).toLocaleTimeString()}
+                      {isMine(msg) && (
+                        <span className="ml-1 text-xs text-gray-400">
+                          {msg.status === "Đang gửi" ? "⏳" :
+                          msg.status === "Đã gửi"  ? "✓"  :
+                          msg.status === "Đã nhận" ? "✓✓" :
+                          msg.status === "Đã xem"  ? "✓✓👀" : ""}
+                        </span>
+                      )}
                     </div>
 
                     {/* Reactions */}
@@ -898,7 +996,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
                       {Array.isArray(msg.reactions) && msg.reactions.length > 0 &&
                         msg.reactions.map((r, idx) => {
                           const userIDs = r.userIDs || [];
-                          const mineReact = userIDs.includes(me);
+                          const mineReact = userIDs.includes(meRef.current);
                           const count = userIDs.length;
                           return (
                             <button
