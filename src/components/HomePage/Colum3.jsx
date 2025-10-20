@@ -65,6 +65,9 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
   const [ctxMenu, setCtxMenu] = useState({ visible: false, x: 0, y: 0, message: null });
 
   const [typingUsers, setTypingUsers] = useState([]); // array of { id, name? }
+  const [presence, setPresence] = useState(new Map()); // key: userId, val: { online, lastSeen }
+  const [peerId, setPeerId] = useState(null);          // id đối phương cho 1-1 (để chấm xanh header)
+
   const typingTimeoutRef = useRef(null);
   const isTypingRef = useRef(false);
 
@@ -111,6 +114,43 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
       readSentRef.current.add(m.id);
     } catch {}
   };
+
+  const timeAgo = (iso) => {
+    try {
+      const d = new Date(iso);
+      const s = Math.floor((Date.now() - d.getTime()) / 1000);
+      if (s < 60) return `${s}s trước`;
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m} phút trước`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h} giờ trước`;
+      const d2 = Math.floor(h / 24);
+      return `${d2} ngày trước`;
+    } catch { return ""; }
+  };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        if (!currentChannel?.channelID && !currentChannel?.id) {
+          setPeerId(null);
+          return;
+        }
+        const cid = currentChannel.id || currentChannel.channelID;
+        const members = await getChannelMembers(cid); // [{ MemberID, Role, ... }]
+        const me = sessionStorage.getItem("userID");
+        // nếu là kênh 1-1: pick member khác mình làm peerId
+        if (Array.isArray(members) && members.length === 2) {
+          const other = members.find(m => m.MemberID !== me);
+          setPeerId(other?.MemberID || null);
+        } else {
+          setPeerId(null); // group: không chấm xanh header (có thể làm sau)
+        }
+      } catch {
+        setPeerId(null);
+      }
+    })();
+  }, [currentChannel?.id, currentChannel?.channelID]);
 
   useEffect(() => {
     const a = audioRef.current;
@@ -171,6 +211,18 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     const currentId = currentChannel.id || currentChannel.channelID;
 
     const ws = connectWebSocket((incoming) => {
+      if (incoming?.type === "presence" && incoming?.userId) {
+        setPresence(prev => {
+          const next = new Map(prev);
+          next.set(incoming.userId, {
+            online: !!incoming.online,
+            lastSeen: incoming.lastSeen || null,
+          });
+          return next;
+        });
+        return;
+      }
+
       if (!incoming?.channelId) return;
       if (incoming.channelId !== currentId) return;
 
@@ -814,16 +866,40 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     <div className="flex h-full flex-col rounded-xl p-4 bg-gradient-to-br from-black via-purple-900 to-black shadow-[0_0_20px_#a855f7]">
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-purple-700 pb-3 mb-3">
-        <img
-          src={currentChannel?.userAvatar || currentChannel?.channelAvatar}
-          alt={currentChannel?.userName || currentChannel?.channelName || "Channel"}
-          className="w-10 h-10 rounded-full border border-purple-400 object-cover"
-        />
+        <div className="relative">
+          <img
+            src={currentChannel?.userAvatar || currentChannel?.channelAvatar}
+            alt={currentChannel?.userName || currentChannel?.channelName || "Channel"}
+            className="w-10 h-10 rounded-full border border-purple-400 object-cover"
+          />
+          {/* Dot chỉ hiển thị khi có peerId (kênh 1-1) */}
+          {peerId && (() => {
+            const p = presence.get(peerId);
+            const isOnline = !!p?.online;
+            return (
+              <span
+                className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-black ${isOnline ? "bg-green-500" : "bg-gray-500"}`}
+                title={isOnline ? "Đang hoạt động" : (p?.lastSeen ? `Hoạt động ${timeAgo(p.lastSeen)}` : "Ngoại tuyến")}
+              />
+            );
+          })()}
+        </div>
+
         <div>
           <h3 className="text-lg font-bold text-purple-300">
             {currentChannel?.channelName || currentChannel?.userName || "Không tên"}
           </h3>
-          <p className="text-xs text-gray-400">{currentChannel?.channelType || ""}</p>
+          <p className="text-xs text-gray-400">
+            {/* Subtitle: online/offline cho 1-1; còn group giữ nguyên type */}
+            {peerId
+              ? (() => {
+                  const p = presence.get(peerId);
+                  if (p?.online) return "Đang hoạt động";
+                  if (p?.lastSeen) return `Hoạt động ${timeAgo(p.lastSeen)}`;
+                  return "Ngoại tuyến";
+                })()
+              : (currentChannel?.channelType || "")}
+          </p>
         </div>
         <button
           onClick={handleOpenMenu}
