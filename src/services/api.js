@@ -318,9 +318,6 @@ const loginUser = async (loginData) => {
       return response.data;
     } catch (error) {
       console.error("[loginUser]Lỗi API đăng nhập:", error.response || error);
-      if (error.response?.data?.error) {
-        throw new Error(error.response.data.error); // Trả lỗi cụ thể
-      }
       throw error;
     }
   };
