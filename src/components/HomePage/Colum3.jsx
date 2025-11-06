@@ -18,12 +18,18 @@ import {
   wsSendDelivered,
   wsSendRead,
 } from "../../services/api";
-import { BsThreeDotsVertical } from "react-icons/bs";
+import { BsThreeDotsVertical, BsArrowLeft } from "react-icons/bs";
 import ChannelMenu from "../Channel/ChannelMenu";
 import ChannelModal from "../Channel/ChannelModal";
 import { FiCornerUpLeft, FiEdit2 } from "react-icons/fi";
 
-const Column3 = ({ mode, selectedOption, currentChannel }) => {
+const STATUS_RANK = { "Đang gửi":0, "Đã gửi":1, "Đã nhận":2, "Đã xem":3 };
+function stageOf(s, fallback = 0) {
+  if (typeof s === "number") return s;
+  return STATUS_RANK[s] ?? fallback;
+}
+
+const Column3 = ({ mode, selectedOption, currentChannel, onBack }) => {
   const [friends, setFriends] = useState([]);
   const [friendsError, setFriendsError] = useState("");
   const [friendRequests, setFriendRequests] = useState([]);
@@ -86,34 +92,27 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     return `${m}:${s}`;
   };
 
-  const stageOf = (s, fallback = 0) => {
-    // nếu BE đã trả statusStage thì ưu tiên số
-    if (typeof s === "number") return s;
-    const rank = { "Đang gửi":0, "Đã gửi":1, "Đã nhận":2, "Đã xem":3 };
-    return rank[s] ?? fallback;
-  };
+  const markDeliveredOnce = React.useCallback((m, channelId, me) => {
+  if (m.senderId === me) return;
+  const curStage = stageOf(m.statusStage ?? m.status, 0);
+  if (curStage >= 2) return; // ≥ Đã nhận
+  if (deliveredSentRef.current.has(m.id)) return;
+  try {
+    wsSendDelivered(m.id, channelId, me);
+    deliveredSentRef.current.add(m.id);
+  } catch {}
+}, []);
 
-  const markDeliveredOnce = (m, channelId, me) => {
-    if (m.senderId === me) return;
-    const curStage = stageOf(m.statusStage ?? m.status, 0);
-    if (curStage >= 2) return; // đã ≥ Đã nhận thì khỏi gửi
-    if (deliveredSentRef.current.has(m.id)) return;
-    try {
-      wsSendDelivered(m.id, channelId, me);
-      deliveredSentRef.current.add(m.id);
-    } catch {}
-  };
-
-  const markReadOnce = (m, channelId, me) => {
-    if (m.senderId === me) return;
-    const curStage = stageOf(m.statusStage ?? m.status, 0);
-    if (curStage >= 3) return; // đã ≥ Đã xem thì khỏi gửi
-    if (readSentRef.current.has(m.id)) return;
-    try {
-      wsSendRead(m.id, channelId, me);
-      readSentRef.current.add(m.id);
-    } catch {}
-  };
+const markReadOnce = React.useCallback((m, channelId, me) => {
+  if (m.senderId === me) return;
+  const curStage = stageOf(m.statusStage ?? m.status, 0);
+  if (curStage >= 3) return; // ≥ Đã xem
+  if (readSentRef.current.has(m.id)) return;
+  try {
+    wsSendRead(m.id, channelId, me);
+    readSentRef.current.add(m.id);
+  } catch {}
+}, []);
 
   const timeAgo = (iso) => {
     try {
@@ -355,7 +354,7 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
       });
 
     return () => ws.close();
-  }, [currentChannel]);
+  }, [currentChannel, markDeliveredOnce, markReadOnce]);
 
   // API: Messages
   const fetchMessages = async (channelID) => {
@@ -866,6 +865,12 @@ const Column3 = ({ mode, selectedOption, currentChannel }) => {
     <div className="flex h-full flex-col rounded-xl p-4 bg-gradient-to-br from-black via-purple-900 to-black shadow-[0_0_20px_#a855f7]">
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-purple-700 pb-3 mb-3">
+        <button 
+          onClick={onBack} 
+          className="p-2 rounded-full hover:bg-purple-700/30 transition lg:hidden"
+        >
+          <BsArrowLeft className="w-6 h-6 text-gray-200" /> Hello
+        </button>
         <div className="relative">
           <img
             src={currentChannel?.userAvatar || currentChannel?.channelAvatar}

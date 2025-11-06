@@ -1,3 +1,4 @@
+// File: src/pages/HomePage.jsx
 import React, { useState, useEffect, useCallback } from "react";
 import "../css/HomePage.css";
 import Column1 from "../components/HomePage/Colum1";
@@ -9,21 +10,27 @@ const HomePage = () => {
   const [currentChannel, setCurrentChannel] = useState(null);
   const [selectedOption, setSelectedOption] = useState("Chat");
 
-  // Reset cột 3 khi chế độ thay đổi
+  // Reset khi đổi mode
   useEffect(() => {
     if (mode === "friends") {
       setSelectedOption("Danh sách bạn bè");
       setCurrentChannel(null);
     } else if (mode === "chat") {
-        setSelectedOption("Chat");
-    } 
+      setSelectedOption("Chat");
+    }
   }, [mode]);
 
   // Load lại channel khi F5
   useEffect(() => {
     const saved = sessionStorage.getItem("currentChannel");
     if (saved) {
-      setCurrentChannel(JSON.parse(saved));
+      try {
+        const parsed = JSON.parse(saved);
+        setCurrentChannel(parsed);
+      } catch (e) {
+        console.error("[HomePage] parse currentChannel error:", e);
+        sessionStorage.removeItem("currentChannel");
+      }
     }
   }, []);
 
@@ -31,13 +38,15 @@ const HomePage = () => {
   useEffect(() => {
     if (currentChannel) {
       sessionStorage.setItem("currentChannel", JSON.stringify(currentChannel));
+    } else {
+      sessionStorage.removeItem("currentChannel");
     }
   }, [currentChannel]);
 
-  const handleModeChange = (newMode) => {
-    console.log(`Đang ở chế độ ${newMode}`);
+  const handleModeChange = useCallback((newMode) => {
+    console.log(`[HomePage] mode -> ${newMode}`);
     setMode(newMode);
-  };
+  }, []);
 
   const handleSelectOption = useCallback((option, channel) => {
     console.log("[HomePage] handleSelectOption:", option, channel);
@@ -47,11 +56,37 @@ const HomePage = () => {
     }
   }, []);
 
+  // Cho Column3 gọi khi bấm nút Back
+  const handleBack = useCallback(() => {
+    setCurrentChannel(null);
+  }, []);
+
   return (
     <div className="home-page">
-      <Column1 setMode={handleModeChange} resetToDefault={() => setMode("chat")} />
-      <Column2 mode={mode} onSelectOption={handleSelectOption} setCurrentChannel={setCurrentChannel} />
-      <Column3 mode={mode} selectedOption={selectedOption} currentChannel={currentChannel} />
+      {/* Màn hình danh sách (Col1 + Col2) */}
+      <div className={`${currentChannel ? "hidden" : "flex"} lg:flex flex-shrink-0`}>
+        <Column1 setMode={handleModeChange} resetToDefault={() => setMode("chat")} />
+      </div>
+
+      <div
+        className={`${currentChannel ? "hidden" : "flex"} lg:flex w-full flex-col lg:w-auto lg:max-w-sm xl:max-w-md`}
+      >
+        <Column2
+          mode={mode}
+          onSelectOption={handleSelectOption}
+          setCurrentChannel={setCurrentChannel}
+        />
+      </div>
+
+      {/* Màn hình chat (Col3) */}
+      <div className={`${currentChannel ? "flex" : "hidden"} lg:flex w-full flex-1`}>
+        <Column3
+          mode={mode}
+          selectedOption={selectedOption}
+          currentChannel={currentChannel}
+          onBack={handleBack}
+        />
+      </div>
     </div>
   );
 };

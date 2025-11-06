@@ -321,7 +321,32 @@ const loginUser = async (loginData) => {
       throw error;
     }
   };
-  
+
+  // Gửi yêu cầu OTP đặt lại mật khẩu
+export const requestPasswordOtp = async (email) => {
+  try {
+    const response = await API.post("/auth/request-password-otp", { email });
+    return response.data; // Trả về { message: "Nếu email tồn tại, mã OTP đã được gửi" }
+  } catch (error) {
+    console.error("[requestPasswordOtp] Lỗi:", error.response || error);
+    throw error.response?.data || new Error("Lỗi không xác định");
+  }
+};
+
+// Xác nhận OTP và đặt lại mật khẩu mới
+export const resetPasswordWithOtp = async (email, otp, newPassword) => {
+  try {
+    const response = await API.post("/auth/reset-password-with-otp", {
+      email,
+      otp,
+      newPassword,
+    });
+    return response.data; // Trả về { message: "Đổi mật khẩu thành công!" }
+  } catch (error) {
+    console.error("[resetPasswordWithOtp] Lỗi:", error.response || error);
+    throw error.response?.data || new Error("Lỗi không xác định");
+  }
+};
   
   // Đăng ký người dùng
   const registerUser = async (userData) => {
