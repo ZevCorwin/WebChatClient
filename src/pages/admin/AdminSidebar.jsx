@@ -16,7 +16,13 @@ export default function AdminSidebar() {
         Người dùng
       </NavLink>
       {/* <NavLink to="/admin/allowlist" className={({isActive}) => `${linkBase} ${isActive?linkActive:""}`}>Allowlist</NavLink> */}
-      {/* <NavLink to="/admin/stats" className={({isActive}) => `${linkBase} ${isActive?linkActive:""}`}>Thống kê</NavLink> */}
+      <NavLink to="/admin/stats" className={({isActive}) => `${linkBase} ${isActive?linkActive:""}`}>Thống kê</NavLink>
+      <NavLink
+        to="/admin/roles"
+        className={({ isActive }) => `${linkBase} ${isActive ? linkActive : ""}`}
+      >
+        Quản lý vai trò
+      </NavLink>
     </aside>
   );
 }

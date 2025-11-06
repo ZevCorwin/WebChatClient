@@ -12,8 +12,8 @@ import NeonCursor from "./components/NeonCursor";
 import AdminLogin from "./pages/admin/AdminLogin";
 import AdminLayout from "./pages/admin/AdminLayout";
 import AdminUsers from "./pages/admin/AdminUsers";
-// (tuỳ, sau thêm) import AdminAllowlist from "./pages/admin/AdminAllowlist";
-// (tuỳ, sau thêm) import AdminStats from "./pages/admin/AdminStats";
+import AdminStats from "./pages/admin/AdminStats";
+import AdminRoles from "./pages/admin/AdminRoles";
 import AdminRoute from "./components/AdminRoute";
 
 function App() {
@@ -49,8 +49,8 @@ function App() {
           }
         >
           <Route path="users" element={<AdminUsers />} />
-          {/* <Route path="allowlist" element={<AdminAllowlist />} /> */}
-          {/* <Route path="stats" element={<AdminStats />} /> */}
+          <Route path="stats" element={<AdminStats />} />
+          <Route path="roles" element={<AdminRoles />} />
           <Route index element={<Navigate to="users" replace />} />
         </Route>
       </Routes>

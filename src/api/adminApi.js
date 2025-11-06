@@ -53,3 +53,59 @@ export async function adminUnlockUser(userId) {
   const res = await adminAxios.post(`/api/admin/users/${userId}/unlock`);
   return res.data;
 }
+
+export async function getOverviewStats() {
+  const res = await adminAxios.get("/api/admin/stats/overview");
+  return res.data;
+}
+
+export async function getMessageActivityStats() {
+  const res = await adminAxios.get("/api/admin/stats/messages");
+  return res.data;
+}
+
+export async function getUserGrowthStats() {
+  const res = await adminAxios.get("/api/admin/stats/user-growth");
+  return res.data;
+}
+
+// === QUẢN LÝ QUYỀN (PERMISSIONS) ===
+
+export async function getPermissions() {
+  const res = await adminAxios.get("/api/admin/permissions");
+  return res.data || [];
+}
+
+// === QUẢN LÝ VAI TRÒ (ROLES) ===
+
+export async function getRoles() {
+  const res = await adminAxios.get("/api/admin/roles");
+  return res.data || [];
+}
+
+export async function createRole(name, permissionIDs) {
+  const res = await adminAxios.post("/api/admin/roles", { name, permissionIDs });
+  return res.data;
+}
+
+export async function updateRole(roleID, name, permissionIDs) {
+  const res = await adminAxios.put(`/api/admin/roles/${roleID}`, { name, permissionIDs });
+  return res.data;
+}
+
+export async function deleteRole(roleID) {
+  const res = await adminAxios.delete(`/api/admin/roles/${roleID}`);
+  return res.data;
+}
+
+// === GÁN QUYỀN CHO USER ===
+
+export async function assignRoleToUser(userID, roleID) {
+  const res = await adminAxios.post(`/api/admin/users/${userID}/assign-role`, { roleID });
+  return res.data;
+}
+
+export async function revokeRoleFromUser(userID, roleID) {
+  const res = await adminAxios.post(`/api/admin/users/${userID}/revoke-role`, { roleID });
+  return res.data;
+}
